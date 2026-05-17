@@ -28,6 +28,13 @@ struct GarminConfigurationView: View {
         }
         .navigationTitle("Garmin")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if !viewModel.config.actionItems.isEmpty {
+                    EditButton()
+                }
+            }
+        }
         .onAppear {
             guard !isLoaded else { return }
             viewModel.loadConfig()
@@ -105,10 +112,19 @@ struct GarminConfigurationView: View {
     private var actionsSection: some View {
         Section("Actions") {
             ForEach(viewModel.config.actionItems, id: \.serverUniqueId) { item in
-                magicItemRow(item)
+                NavigationLink {
+                    MagicItemCustomizationView(mode: .edit, context: .garmin, item: item) { updatedItem in
+                        viewModel.updateAction(updatedItem)
+                    }
+                } label: {
+                    magicItemRow(item)
+                }
             }
             .onDelete { offsets in
                 viewModel.deleteAction(at: offsets)
+            }
+            .onMove { source, destination in
+                viewModel.moveAction(from: source, to: destination)
             }
             Button {
                 viewModel.showAddAction = true

@@ -48,13 +48,13 @@ final class GarminConfigurationViewModel: ObservableObject {
     }
 
     func addAction(_ item: MagicItem) {
-        var item = item
         guard GarminSupportedDomains.supportsAction(item) else { return }
         guard !config.actionItems.contains(where: { $0.serverUniqueId == item.serverUniqueId }) else { return }
-        if GarminSupportedDomains.requiresConfirmation(item) {
-            item.customization = item.customization ?? .init()
-            item.customization?.requiresConfirmation = true
+        guard config.actionItems.count < GarminConfig.maxActionItems else {
+            showError(message: "Garmin supports up to \(GarminConfig.maxActionItems) favorite actions.")
+            return
         }
+        let item = actionWithRequiredConfirmationIfNeeded(item)
         if config.selectedServerId == nil {
             config.selectedServerId = item.serverId
         }
@@ -96,7 +96,7 @@ final class GarminConfigurationViewModel: ObservableObject {
 
     func updateAction(_ item: MagicItem) {
         if let index = config.actionItems.firstIndex(where: { $0.id == item.id && $0.serverId == item.serverId }) {
-            config.actionItems[index] = item
+            config.actionItems[index] = actionWithRequiredConfirmationIfNeeded(item)
             save()
         }
     }
@@ -106,12 +106,21 @@ final class GarminConfigurationViewModel: ObservableObject {
         save()
     }
 
+    func moveAction(from source: IndexSet, to destination: Int) {
+        config.actionItems.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
     func deleteStatus(at offsets: IndexSet) {
         config.statusItems.remove(atOffsets: offsets)
         save()
     }
 
     func sync() {
+        guard config.actionItems.count <= GarminConfig.maxActionItems else {
+            showError(message: "Garmin supports up to \(GarminConfig.maxActionItems) favorite actions.")
+            return
+        }
         connectionState = bridgeService.connectionState
         bridgeService.sync(config: config, itemInfo: { [weak self] item in
             self?.magicItemInfo(for: item)
@@ -178,6 +187,14 @@ final class GarminConfigurationViewModel: ObservableObject {
         guard let prefilledItem, !didApplyPrefilledItem else { return }
         didApplyPrefilledItem = true
         addAction(prefilledItem)
+    }
+
+    private func actionWithRequiredConfirmationIfNeeded(_ item: MagicItem) -> MagicItem {
+        guard GarminSupportedDomains.requiresConfirmation(item) else { return item }
+        var item = item
+        item.customization = item.customization ?? .init()
+        item.customization?.requiresConfirmation = true
+        return item
     }
 
     private func loadDiscovery() {

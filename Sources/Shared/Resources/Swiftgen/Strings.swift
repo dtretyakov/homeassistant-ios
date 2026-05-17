@@ -2289,6 +2289,10 @@ public enum L10n {
     public enum RequireConfirmation {
       /// Require confirmation
       public static var title: String { return L10n.tr("Localizable", "magic_item.require_confirmation.title") }
+      public enum Garmin {
+        /// Garmin requires confirmation for this action.
+        public static var footer: String { return L10n.tr("Localizable", "magic_item.require_confirmation.garmin.footer") }
+      }
     }
     public enum TextColor {
       /// Text color

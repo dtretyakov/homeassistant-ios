@@ -3,6 +3,7 @@ import GRDB
 
 public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatable {
     public static var garminConfigId: String { "garmin-config" }
+    public static var maxActionItems: Int { 12 }
 
     public var id = GarminConfig.garminConfigId
     public var selectedServerId: String?

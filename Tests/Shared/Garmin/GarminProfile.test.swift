@@ -24,4 +24,27 @@ struct GarminProfileTests {
         #expect(!encoded.contains("refresh_token"))
         #expect(!encoded.contains("webhook"))
     }
+
+    @Test func profilePreservesActionOrderLabelsAndConfirmation() throws {
+        let first = MagicItem(
+            id: "scene.movie",
+            serverId: "server-1",
+            type: .scene,
+            customization: .init(requiresConfirmation: true),
+            displayText: "Movie"
+        )
+        let second = MagicItem(
+            id: "light.kitchen",
+            serverId: "server-1",
+            type: .entity,
+            customization: .init(requiresConfirmation: false),
+            displayText: "Kitchen"
+        )
+        let config = GarminConfig(actionItems: [first, second])
+
+        let profile = GarminProfile(config: config) { _ in nil }
+
+        #expect(profile.actions.map(\.label) == ["Movie", "Kitchen"])
+        #expect(profile.actions.map(\.requiresConfirmation) == [true, false])
+    }
 }

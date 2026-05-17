@@ -236,16 +236,30 @@ struct MagicItemCustomizationView: View {
         if !(context == .carPlay && viewModel.item.type == .assistPipeline) {
             Section {
                 Toggle(L10n.MagicItem.RequireConfirmation.title, isOn: .init(get: {
+                    if isGarminGuardedAction {
+                        return true
+                    }
                     viewModel.item.customization?.requiresConfirmation ?? false
                 }, set: { newValue in
+                    if isGarminGuardedAction {
+                        viewModel.item.customization?.requiresConfirmation = true
+                        return
+                    }
                     viewModel.item.customization?.requiresConfirmation = newValue
                 }))
+                .disabled(isGarminGuardedAction)
             } footer: {
-                if context == .widget {
+                if isGarminGuardedAction {
+                    Text(verbatim: L10n.MagicItem.RequireConfirmation.Garmin.footer)
+                } else if context == .widget {
                     Text(verbatim: L10n.Widgets.Custom.RequireConfirmation.footer)
                 }
             }
         }
+    }
+
+    private var isGarminGuardedAction: Bool {
+        context == .garmin && GarminSupportedDomains.requiresConfirmation(viewModel.item)
     }
 
     private var navigateActionTextfield: some View {
