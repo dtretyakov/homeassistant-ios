@@ -72,4 +72,40 @@ struct EntityPickerViewModelTests {
         #expect(vm.entitiesByDomain["light"]?.count == 2)
         #expect(vm.entitiesByDomain["switch"]?.count == 1)
     }
+
+    @Test("Typed domain filters keep existing filtering behavior")
+    func typedDomainFiltersGroupByDomain() async throws {
+        let vm = EntityPickerViewModel(
+            domainFilter: nil,
+            domainFilters: [.light, .switch],
+            selectedServerId: nil
+        )
+        vm.entities = [
+            .make("light.kitchen", name: "Kitchen Light", domain: "light", serverId: "A"),
+            .make("switch.pump", name: "Pump", domain: "switch", serverId: "A"),
+            .make("sensor.temperature", name: "Temperature", domain: "sensor", serverId: "A"),
+        ]
+
+        vm._test_groupByDomain()
+
+        #expect(vm.entitiesByDomain.keys.sorted() == ["light", "switch"])
+    }
+
+    @Test("Raw domain filters support Home Assistant domains missing from Domain enum")
+    func rawDomainFiltersGroupByDomain() async throws {
+        let vm = EntityPickerViewModel(
+            domainFilter: nil,
+            rawDomainFilters: ["alarm_control_panel", "device_tracker"],
+            selectedServerId: nil
+        )
+        vm.entities = [
+            .make("alarm_control_panel.home", name: "Alarm", domain: "alarm_control_panel", serverId: "A"),
+            .make("device_tracker.phone", name: "Phone", domain: "device_tracker", serverId: "A"),
+            .make("light.kitchen", name: "Kitchen Light", domain: "light", serverId: "A"),
+        ]
+
+        vm._test_groupByDomain()
+
+        #expect(vm.entitiesByDomain.keys.sorted() == ["alarm_control_panel", "device_tracker"])
+    }
 }

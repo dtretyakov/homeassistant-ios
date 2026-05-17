@@ -29,7 +29,8 @@ public struct GarminProfile: Codable, Equatable {
                     requiresConfirmation: item.customization?.requiresConfirmation ?? false
                 )
             },
-            statuses: config.statusItems.map { item in
+            statuses: config.statusItems.compactMap { item in
+                guard GarminSupportedDomains.supportsStatus(item) else { return nil }
                 let info = itemInfo(item)
                 return GarminProfileStatus(
                     id: GarminConfig.opaqueStatusId(for: item),
@@ -79,7 +80,8 @@ public struct GarminStatusSnapshot: Codable, Equatable {
         itemInfo: (MagicItem) -> MagicItem.Info?,
         valueProvider: (MagicItem) -> String?
     ) {
-        self.init(statuses: config.statusItems.map { item in
+        self.init(statuses: config.statusItems.compactMap { item in
+            guard GarminSupportedDomains.supportsStatus(item) else { return nil }
             let info = itemInfo(item)
             return GarminStatusValue(
                 id: GarminConfig.opaqueStatusId(for: item),

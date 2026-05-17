@@ -17,8 +17,10 @@ struct GarminConfigurationView: View {
             } else {
                 serverSection
                 connectionSection
+                recommendedActionsSection
                 actionsSection
                 if GarminFeature.supportsStatusItems {
+                    recommendedStatusesSection
                     statusSection
                 }
                 diagnosticsSection
@@ -46,7 +48,8 @@ struct GarminConfigurationView: View {
                 MagicItemAddView(
                     context: .garmin,
                     initialItemType: .entities,
-                    visiblePickerOptions: [.entities]
+                    visiblePickerOptions: [.entities],
+                    garminRawDomainFilters: Array(GarminSupportedDomains.statusDomainRawValues)
                 ) { item in
                     guard let item else { return }
                     viewModel.addStatus(item)
@@ -77,6 +80,7 @@ struct GarminConfigurationView: View {
             }
             .onChange(of: viewModel.config.selectedServerId) { _ in
                 viewModel.save()
+                viewModel.refreshDiscovery()
             }
         }
     }
@@ -114,6 +118,24 @@ struct GarminConfigurationView: View {
         }
     }
 
+    @ViewBuilder
+    private var recommendedActionsSection: some View {
+        let candidates = viewModel.discoveryResult.recommendedActions.filter {
+            !viewModel.isActionSelected($0)
+        }
+        if !candidates.isEmpty {
+            Section("Recommended actions") {
+                ForEach(candidates) { candidate in
+                    Button {
+                        viewModel.addRecommendedAction(candidate)
+                    } label: {
+                        candidateRow(candidate)
+                    }
+                }
+            }
+        }
+    }
+
     private var statusSection: some View {
         Section("Statuses") {
             ForEach(viewModel.config.statusItems, id: \.serverUniqueId) { item in
@@ -126,6 +148,24 @@ struct GarminConfigurationView: View {
                 viewModel.showAddStatus = true
             } label: {
                 Label("Add status", systemSymbol: .plus)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recommendedStatusesSection: some View {
+        let candidates = viewModel.discoveryResult.recommendedStatuses.filter {
+            !viewModel.isStatusSelected($0)
+        }
+        if !candidates.isEmpty {
+            Section("Recommended statuses") {
+                ForEach(candidates) { candidate in
+                    Button {
+                        viewModel.addRecommendedStatus(candidate)
+                    } label: {
+                        candidateRow(candidate)
+                    }
+                }
             }
         }
     }
@@ -152,7 +192,11 @@ struct GarminConfigurationView: View {
     }
 
     private func magicItemRow(_ item: MagicItem) -> some View {
-        let info = viewModel.magicItemInfo(for: item) ?? .init(id: item.id, name: item.displayText ?? item.id, iconName: "")
+        let info = viewModel.magicItemInfo(for: item) ?? .init(
+            id: item.id,
+            name: item.displayText ?? item.id,
+            iconName: ""
+        )
         return HStack {
             Text(item.name(info: info))
             Spacer()
@@ -160,6 +204,32 @@ struct GarminConfigurationView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func candidateRow(_ candidate: GarminEntityCandidate) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(candidate.name)
+                    .foregroundStyle(.primary)
+                Text(candidateDetail(candidate))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "plus.circle")
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private func candidateDetail(_ candidate: GarminEntityCandidate) -> String {
+        var parts = [candidate.domain]
+        if let areaName = candidate.areaName {
+            parts.append(areaName)
+        }
+        if candidate.requiresConfirmation {
+            parts.append("Confirmation")
+        }
+        return parts.joined(separator: " - ")
     }
 
     private var connectionStateText: String {

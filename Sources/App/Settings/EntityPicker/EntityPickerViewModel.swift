@@ -38,6 +38,7 @@ final class EntityPickerViewModel: ObservableObject {
 
     let domainFilter: Domain?
     let domainFilters: [Domain]?
+    let rawDomainFilters: [String]?
     private var filterTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
@@ -48,6 +49,9 @@ final class EntityPickerViewModel: ObservableObject {
     var availableDomainFilters: [String] {
         if let domainFilters {
             return domainFilters.map(\.rawValue).sorted()
+        }
+        if let rawDomainFilters {
+            return rawDomainFilters.sorted()
         }
         return entitiesByDomain.keys.sorted()
     }
@@ -68,9 +72,15 @@ final class EntityPickerViewModel: ObservableObject {
         selectedGrouping = .area
     }
 
-    init(domainFilter: Domain?, domainFilters: [Domain]? = nil, selectedServerId: String?) {
+    init(
+        domainFilter: Domain?,
+        domainFilters: [Domain]? = nil,
+        rawDomainFilters: [String]? = nil,
+        selectedServerId: String?
+    ) {
         self.domainFilter = domainFilter
         self.domainFilters = domainFilters
+        self.rawDomainFilters = rawDomainFilters
         self.selectedServerId = selectedServerId
         self.selectedDomainFilter = domainFilter?.rawValue
         setupFiltering()
@@ -177,6 +187,9 @@ final class EntityPickerViewModel: ObservableObject {
         } else if let domainFilters {
             let allowedDomains = Set(domainFilters.map(\.rawValue))
             groups = groups.filter { allowedDomains.contains($0.key) }
+        } else if let rawDomainFilters {
+            let allowedDomains = Set(rawDomainFilters)
+            groups = groups.filter { allowedDomains.contains($0.key) }
         }
 
         entitiesByDomain = groups
@@ -193,10 +206,19 @@ final class EntityPickerViewModel: ObservableObject {
         // Snapshot state needed for filtering
         let searchTerm = searchTerm
         let domainFilter = selectedDomainFilter
-        let allowedDomains = domainFilters.map { Set($0.map(\.rawValue)) }
+        let allowedDomains = rawDomainFilters.map { Set($0) } ?? domainFilters.map { Set($0.map(\.rawValue)) }
         let areaFilter = selectedAreaFilter
         let grouping = selectedGrouping
         let noAreaTitle = L10n.EntityPicker.List.Area.NoArea.title
+        let hiddenEntityIds = rawDomainFilters == nil ? Set<String>() : Set(
+            registryEntriesData.compactMap { registry -> String? in
+                guard registry.hiddenBy != nil
+                    || registry.disabledBy != nil
+                    || registry.entityCategory == "config"
+                    || registry.entityCategory == "diagnostic" else { return nil }
+                return registry.entityId
+            }
+        )
 
         // Pull cached lookups
         let entityToArea = cachedEntityToArea
@@ -211,6 +233,8 @@ final class EntityPickerViewModel: ObservableObject {
 
             // First, filter entities by domain, area, and search
             let filteredEntities = serverScopedEntities.filter { entity in
+                if hiddenEntityIds.contains(entity.entityId) { return false }
+
                 // Filter by domain if set
                 if let domainFilter, entity.domain != domainFilter { return false }
                 if domainFilter == nil, let allowedDomains, !allowedDomains.contains(entity.domain) { return false }

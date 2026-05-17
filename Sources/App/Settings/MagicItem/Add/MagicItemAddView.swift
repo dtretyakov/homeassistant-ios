@@ -24,6 +24,7 @@ struct MagicItemAddView: View {
     @State private var selectedEntity: HAAppEntity?
     private let visiblePickerOptions: [PickerOption]
     private let initialItemType: MagicItemAddType
+    private let garminRawDomainFilters: [String]?
 
     let context: Context
     let itemToAdd: (MagicItem?) -> Void
@@ -32,10 +33,14 @@ struct MagicItemAddView: View {
         context: Context,
         initialItemType: MagicItemAddType? = nil,
         visiblePickerOptions: [PickerOption]? = nil,
+        garminRawDomainFilters: [String]? = nil,
         itemToAdd: @escaping (MagicItem?) -> Void
     ) {
         self.context = context
         self.itemToAdd = itemToAdd
+        self.garminRawDomainFilters = garminRawDomainFilters ?? (
+            context == .garmin ? GarminSupportedDomains.actionDomainRawValues : nil
+        )
 
         let resolvedPickerOptions = visiblePickerOptions ?? {
             var options: [PickerOption] = []
@@ -78,7 +83,7 @@ struct MagicItemAddView: View {
                         pickerView
                             .padding(.horizontal)
                         if context == .garmin {
-                            entitiesPerServerList(domainFilters: GarminSupportedDomains.actionDomains)
+                            entitiesPerServerList(rawDomainFilters: garminRawDomainFilters)
                         } else {
                             entitiesPerServerList()
                         }
@@ -227,13 +232,18 @@ struct MagicItemAddView: View {
     }
 
     @ViewBuilder
-    private func entitiesPerServerList(domainFilter: Domain? = nil, domainFilters: [Domain]? = nil) -> some View {
+    private func entitiesPerServerList(
+        domainFilter: Domain? = nil,
+        domainFilters: [Domain]? = nil,
+        rawDomainFilters: [String]? = nil
+    ) -> some View {
         EntityPicker(
             selectedServerId: Current.servers.all
                 .first(where: { $0.identifier.rawValue == viewModel.selectedServerId })?.identifier.rawValue,
             selectedEntity: $selectedEntity,
             domainFilter: domainFilter,
             domainFilters: domainFilters,
+            rawDomainFilters: rawDomainFilters,
             mode: .inline
         )
         .background(

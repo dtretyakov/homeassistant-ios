@@ -10,15 +10,22 @@ final class GarminConfigurationViewModel: ObservableObject {
     @Published var showError = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var connectionState: GarminConnectionState = .notConfigured
+    @Published private(set) var discoveryResult = GarminEntityDiscoveryResult.empty
 
     private let magicItemProvider = Current.magicItemProvider()
     private let bridgeService: GarminBridgeService
+    private let entityDiscoveryService: GarminEntityDiscoveryService
     private let prefilledItem: MagicItem?
     private var didApplyPrefilledItem = false
 
-    init(prefilledItem: MagicItem? = nil, bridgeService: GarminBridgeService = GarminBridgeService()) {
+    init(
+        prefilledItem: MagicItem? = nil,
+        bridgeService: GarminBridgeService = GarminBridgeService(),
+        entityDiscoveryService: GarminEntityDiscoveryService = GarminEntityDiscoveryService()
+    ) {
         self.prefilledItem = prefilledItem
         self.bridgeService = bridgeService
+        self.entityDiscoveryService = entityDiscoveryService
         let magicItemProvider = self.magicItemProvider
         bridgeService.setup(
             configProvider: { try? Current.garminConfig() },
@@ -41,8 +48,13 @@ final class GarminConfigurationViewModel: ObservableObject {
     }
 
     func addAction(_ item: MagicItem) {
+        var item = item
         guard GarminSupportedDomains.supportsAction(item) else { return }
         guard !config.actionItems.contains(where: { $0.serverUniqueId == item.serverUniqueId }) else { return }
+        if GarminSupportedDomains.requiresConfirmation(item) {
+            item.customization = item.customization ?? .init()
+            item.customization?.requiresConfirmation = true
+        }
         if config.selectedServerId == nil {
             config.selectedServerId = item.serverId
         }
@@ -51,12 +63,35 @@ final class GarminConfigurationViewModel: ObservableObject {
     }
 
     func addStatus(_ item: MagicItem) {
+        guard GarminSupportedDomains.supportsStatus(item) else { return }
         guard !config.statusItems.contains(where: { $0.serverUniqueId == item.serverUniqueId }) else { return }
         if config.selectedServerId == nil {
             config.selectedServerId = item.serverId
         }
         config.statusItems.append(item)
         save()
+    }
+
+    func addRecommendedAction(_ candidate: GarminEntityCandidate) {
+        guard candidate.supportsAction else { return }
+        addAction(candidate.magicItem())
+    }
+
+    func addRecommendedStatus(_ candidate: GarminEntityCandidate) {
+        guard candidate.supportsStatus else { return }
+        addStatus(candidate.magicItem())
+    }
+
+    func isActionSelected(_ candidate: GarminEntityCandidate) -> Bool {
+        config.actionItems.contains { $0.id == candidate.entityId && $0.serverId == candidate.serverId }
+    }
+
+    func isStatusSelected(_ candidate: GarminEntityCandidate) -> Bool {
+        config.statusItems.contains { $0.id == candidate.entityId && $0.serverId == candidate.serverId }
+    }
+
+    func refreshDiscovery() {
+        loadDiscovery()
     }
 
     func updateAction(_ item: MagicItem) {
@@ -131,6 +166,7 @@ final class GarminConfigurationViewModel: ObservableObject {
                 save()
             }
             applyPrefilledItemIfNeeded()
+            loadDiscovery()
             connectionState = bridgeService.connectionState
         } catch {
             Current.Log.error("Failed to load Garmin config, error: \(error.localizedDescription)")
@@ -142,6 +178,19 @@ final class GarminConfigurationViewModel: ObservableObject {
         guard let prefilledItem, !didApplyPrefilledItem else { return }
         didApplyPrefilledItem = true
         addAction(prefilledItem)
+    }
+
+    private func loadDiscovery() {
+        guard let serverId = config.selectedServerId ?? servers.first?.identifier.rawValue else {
+            discoveryResult = .empty
+            return
+        }
+        do {
+            discoveryResult = try entityDiscoveryService.discover(serverId: serverId)
+        } catch {
+            Current.Log.error("Failed to load Garmin entity discovery, error: \(error.localizedDescription)")
+            discoveryResult = .empty
+        }
     }
 
     private func showError(message: String) {

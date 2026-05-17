@@ -71,7 +71,7 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
 }
 
 public enum GarminSupportedDomains {
-    public static var actionDomains: [Domain] = [
+    public static var safeActionDomains: [Domain] = [
         .scene,
         .script,
         .light,
@@ -79,9 +79,54 @@ public enum GarminSupportedDomains {
         .inputBoolean,
     ]
 
+    public static var guardedActionDomains: [Domain] = [
+        .cover,
+    ]
+
+    public static var actionDomains: [Domain] {
+        safeActionDomains + guardedActionDomains
+    }
+
+    public static var actionDomainRawValues: [String] {
+        actionDomains.map(\.rawValue)
+    }
+
+    public static var statusDomainRawValues: Set<String> = [
+        Domain.binarySensor.rawValue,
+        Domain.sensor.rawValue,
+        "alarm_control_panel",
+        Domain.light.rawValue,
+        Domain.switch.rawValue,
+        Domain.inputBoolean.rawValue,
+        Domain.lock.rawValue,
+        Domain.cover.rawValue,
+        Domain.person.rawValue,
+        "device_tracker",
+    ]
+
     public static func supportsAction(_ domain: Domain?) -> Bool {
         guard let domain else { return false }
         return actionDomains.contains(domain)
+    }
+
+    public static func supportsAction(rawDomain: String) -> Bool {
+        actionDomains.map(\.rawValue).contains(rawDomain)
+    }
+
+    public static func supportsStatus(rawDomain: String) -> Bool {
+        statusDomainRawValues.contains(rawDomain)
+    }
+
+    public static func supportsStatus(_ item: MagicItem) -> Bool {
+        supportsStatus(rawDomain: rawDomain(for: item))
+    }
+
+    public static func requiresConfirmation(rawDomain: String) -> Bool {
+        guardedActionDomains.map(\.rawValue).contains(rawDomain)
+    }
+
+    public static func requiresConfirmation(_ item: MagicItem) -> Bool {
+        requiresConfirmation(rawDomain: rawDomain(for: item))
     }
 
     public static func supportsAction(_ item: MagicItem) -> Bool {
@@ -89,9 +134,14 @@ public enum GarminSupportedDomains {
         case .scene, .script:
             return true
         case .entity:
-            return supportsAction(item.domain)
+            return supportsAction(rawDomain: rawDomain(for: item))
         case .action, .folder, .assistPipeline, .assistPrompt:
             return false
         }
+    }
+
+    private static func rawDomain(for item: MagicItem) -> String {
+        guard let domain = item.id.split(separator: ".").first else { return "" }
+        return String(domain)
     }
 }
