@@ -21,11 +21,13 @@ struct EntityPicker: View {
         selectedServerId: String? = nil,
         selectedEntity: Binding<HAAppEntity?>,
         domainFilter: Domain?,
+        domainFilters: [Domain]? = nil,
         mode: Mode = .button
     ) {
         self._selectedEntity = selectedEntity
         self._viewModel = .init(wrappedValue: EntityPickerViewModel(
             domainFilter: domainFilter,
+            domainFilters: domainFilters,
             selectedServerId: selectedServerId
         ))
         self.mode = mode
@@ -195,14 +197,14 @@ struct EntityPicker: View {
 
     @ViewBuilder
     private var domainPicker: some View {
-        if viewModel.domainFilter == nil {
+        if !viewModel.isSingleDomainLocked {
             EntityFilterPickerView(
                 title: L10n.EntityPicker.Filter.Domain.title,
                 pickerItems: [EntityFilterPickerView.PickerItem(
                     id: "",
                     title: L10n.EntityPicker.Filter.Domain.All.title
                 )] +
-                    viewModel.entitiesByDomain.keys.sorted().map {
+                    viewModel.availableDomainFilters.map {
                         EntityFilterPickerView.PickerItem(id: $0, title: $0.uppercased())
                     },
                 selectedItemId: Binding(
@@ -235,7 +237,7 @@ struct EntityPicker: View {
 
     @ViewBuilder
     private var groupByPicker: some View {
-        if viewModel.domainFilter == nil {
+        if !viewModel.isSingleDomainLocked {
             EntityFilterPickerView(
                 title: L10n.EntityPicker.Filter.GroupBy.title,
                 pickerItems: EntityGrouping.allCases.map {

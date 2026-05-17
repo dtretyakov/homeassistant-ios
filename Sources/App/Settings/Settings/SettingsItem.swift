@@ -13,6 +13,7 @@ enum SettingsItem: String, Hashable, CaseIterable {
     case nfc
     case widgets
     case appIconShortcuts
+    case garmin
     case watch
     case carPlay
     case complications
@@ -35,6 +36,7 @@ enum SettingsItem: String, Hashable, CaseIterable {
         case .nfc: return L10n.Tags.title
         case .widgets: return L10n.Settings.Widgets.title
         case .appIconShortcuts: return L10n.Settings.AppIconShortcuts.title
+        case .garmin: return "Garmin"
         case .watch: return L10n.Settings.DetailsSection.WatchRowConfiguration.title
         case .carPlay: return "CarPlay"
         case .complications: return L10n.Settings.DetailsSection.WatchRowComplications.title
@@ -71,6 +73,8 @@ enum SettingsItem: String, Hashable, CaseIterable {
                 MaterialDesignIconsImage(icon: .widgetsIcon, size: 24)
             case .appIconShortcuts:
                 MaterialDesignIconsImage(icon: .applicationIcon, size: 24)
+            case .garmin:
+                MaterialDesignIconsImage(icon: .watchVariantIcon, size: 24)
             case .watch:
                 MaterialDesignIconsImage(icon: .watchVariantIcon, size: 24)
             case .carPlay:
@@ -131,6 +135,8 @@ enum SettingsItem: String, Hashable, CaseIterable {
             CustomWidgetsListView()
         case .appIconShortcuts:
             AppIconShortcutsConfigurationView()
+        case .garmin:
+            GarminConfigurationView()
         case .watch:
             WatchConfigurationView()
                 .environment(\.colorScheme, .dark)
@@ -156,12 +162,15 @@ enum SettingsItem: String, Hashable, CaseIterable {
             // Filter based on platform
             #if targetEnvironment(macCatalyst)
             if item == .servers || item == .gestures || item == .kiosk || item == .watch || item == .carPlay ||
-                item == .appIconShortcuts ||
+                item == .appIconShortcuts || item == .garmin ||
                 item == .complications || item == .nfc || item == .help ||
                 item == .whatsNew {
                 return false
             }
             #endif
+            if item == .garmin, !GarminFeature.isEnabled {
+                return false
+            }
             // Live Activities are shown in DebugView
             if item == .liveActivities {
                 return false
@@ -175,7 +184,11 @@ enum SettingsItem: String, Hashable, CaseIterable {
     }
 
     static var integrationItems: [SettingsItem] {
-        [.sensors, .nfc, .widgets, .appIconShortcuts]
+        var items: [SettingsItem] = [.sensors, .nfc, .widgets, .appIconShortcuts]
+        if GarminFeature.isEnabled {
+            items.append(.garmin)
+        }
+        return items
     }
 
     static var watchItems: [SettingsItem] {

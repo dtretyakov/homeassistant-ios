@@ -59,6 +59,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     private var shouldRefreshTitleSubscription = false
 
     private var watchCommunicatorService: WatchCommunicatorService?
+    private var garminBridgeService: GarminBridgeService?
 
     func application(
         _ application: UIApplication,
@@ -114,6 +115,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         UIApplication.shared.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalMinimum)
 
         setupWatchCommunicator()
+        setupGarminBridge()
         setupUIApplicationShortcutItems()
         migrateIfNeeded()
 
@@ -375,6 +377,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     private func setupWatchCommunicator() {
         watchCommunicatorService = WatchCommunicatorService()
         watchCommunicatorService?.setup()
+    }
+
+    private func setupGarminBridge() {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        guard GarminFeature.isEnabled, UIDevice.current.userInterfaceIdiom == .phone else { return }
+        let magicItemProvider = Current.magicItemProvider()
+        magicItemProvider.loadInformation { _ in }
+        let service = GarminBridgeService()
+        service.setup(
+            configProvider: { try? Current.garminConfig() },
+            itemInfoProvider: { magicItemProvider.getInfo(for: $0) }
+        )
+        garminBridgeService = service
+        #endif
     }
 
     func setupLocalization() {

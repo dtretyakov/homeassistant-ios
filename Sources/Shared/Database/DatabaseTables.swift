@@ -6,6 +6,7 @@ public enum GRDBDatabaseTable: String {
     case assistPipelines
     case carPlayConfig
     case appIconShortcutConfig
+    case garminConfig
     case serverInfoMirror
     case appEntityRegistryListForDisplay
     case entityRegistry
@@ -59,6 +60,17 @@ public enum DatabaseTables {
     public enum AppIconShortcutConfig: String, CaseIterable {
         case id
         case items
+    }
+
+    public enum GarminConfig: String, CaseIterable {
+        case id
+        case selectedServerId
+        case actionItems
+        case statusItems
+        case deviceIdentifier
+        case appIdentifier
+        case lastSyncTimestamp
+        case lastError
     }
 
     public enum ServerInfoMirror: String, CaseIterable {

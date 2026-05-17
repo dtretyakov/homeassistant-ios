@@ -8,6 +8,7 @@ public enum AppTriggerSource: String, CaseIterable, CustomStringConvertible {
     case SiriShortcut = "siriShortcut"
     case URLHandler = "urlHandler"
     case CarPlay = "carPlay"
+    case Garmin = "garmin"
     case AppIntent = "appIntent"
 
     public var description: String {

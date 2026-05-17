@@ -44,6 +44,7 @@ extension EntityAddToAction {
 enum EntityAddToActionType: String, Codable {
     case carPlayQuickAccess
     case watchItem
+    case garminItem
     case customWidget
 }
 
@@ -66,6 +67,16 @@ struct WatchItemAction: EntityAddToAction {
 
     func text() -> String {
         L10n.WebView.AddTo.Option.AppleWatch.title
+    }
+}
+
+/// Action to add an entity to Garmin favorites
+struct GarminItemAction: EntityAddToAction {
+    var mdiIcon: String { "mdi:watch" }
+    var actionType: String { EntityAddToActionType.garminItem.rawValue }
+
+    func text() -> String {
+        "Garmin"
     }
 }
 
@@ -162,6 +173,8 @@ private struct AnyEntityAddToAction: Codable {
             self.action = try container.decode(CarPlayQuickAccessAction.self, forKey: .data)
         case .watchItem:
             self.action = try container.decode(WatchItemAction.self, forKey: .data)
+        case .garminItem:
+            self.action = try container.decode(GarminItemAction.self, forKey: .data)
         case .customWidget:
             self.action = try container.decode(CustomWidgetAction.self, forKey: .data)
         }
@@ -183,6 +196,12 @@ private struct AnyEntityAddToAction: Codable {
             }
         case .watchItem:
             if let typed = action as? WatchItemAction {
+                try container.encode(typed, forKey: .data)
+            } else {
+                throw EntityAddToError.encodingFailed
+            }
+        case .garminItem:
+            if let typed = action as? GarminItemAction {
                 try container.encode(typed, forKey: .data)
             } else {
                 throw EntityAddToError.encodingFailed

@@ -8,6 +8,7 @@ struct MagicItemAddView: View {
         case carPlay
         case widget
         case appIconShortcut
+        case garmin
     }
 
     enum PickerOption {
@@ -38,7 +39,7 @@ struct MagicItemAddView: View {
 
         let resolvedPickerOptions = visiblePickerOptions ?? {
             var options: [PickerOption] = []
-            if [.carPlay, .widget, .appIconShortcut].contains(context) {
+            if [.carPlay, .widget, .appIconShortcut, .garmin].contains(context) {
                 options.append(.entities)
             }
             if context != .widget {
@@ -76,7 +77,11 @@ struct MagicItemAddView: View {
                     VStack {
                         pickerView
                             .padding(.horizontal)
-                        entitiesPerServerList()
+                        if context == .garmin {
+                            entitiesPerServerList(domainFilters: GarminSupportedDomains.actionDomains)
+                        } else {
+                            entitiesPerServerList()
+                        }
                     }
                 case .scripts:
                     VStack {
@@ -187,7 +192,7 @@ struct MagicItemAddView: View {
         switch context {
         case .watch:
             return .scripts
-        case .carPlay, .widget, .appIconShortcut:
+        case .carPlay, .widget, .appIconShortcut, .garmin:
             return .entities
         }
     }
@@ -222,12 +227,13 @@ struct MagicItemAddView: View {
     }
 
     @ViewBuilder
-    private func entitiesPerServerList(domainFilter: Domain? = nil) -> some View {
+    private func entitiesPerServerList(domainFilter: Domain? = nil, domainFilters: [Domain]? = nil) -> some View {
         EntityPicker(
             selectedServerId: Current.servers.all
                 .first(where: { $0.identifier.rawValue == viewModel.selectedServerId })?.identifier.rawValue,
             selectedEntity: $selectedEntity,
             domainFilter: domainFilter,
+            domainFilters: domainFilters,
             mode: .inline
         )
         .background(
@@ -243,7 +249,7 @@ struct MagicItemAddView: View {
                         item: .init(
                             id: selectedEntity.entityId,
                             serverId: selectedEntity.serverId,
-                            type: .entity
+                            type: context == .garmin ? garminMagicItemType(for: selectedEntity) : .entity
                         )
                     ) { itemToAdd in
                         self.itemToAdd(itemToAdd)
@@ -252,6 +258,17 @@ struct MagicItemAddView: View {
                 }
             }
         )
+    }
+
+    private func garminMagicItemType(for entity: HAAppEntity) -> MagicItem.ItemType {
+        switch Domain(rawValue: entity.domain) {
+        case .script:
+            return .script
+        case .scene:
+            return .scene
+        default:
+            return .entity
+        }
     }
 
     private func visibleForSearch(title: String, entityId: String) -> Bool {

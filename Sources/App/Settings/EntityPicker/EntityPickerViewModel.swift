@@ -37,8 +37,20 @@ final class EntityPickerViewModel: ObservableObject {
     private var cachedEntitiesByServer: [String: [HAAppEntity]] = [:]
 
     let domainFilter: Domain?
+    let domainFilters: [Domain]?
     private var filterTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
+
+    var isSingleDomainLocked: Bool {
+        domainFilter != nil
+    }
+
+    var availableDomainFilters: [String] {
+        if let domainFilters {
+            return domainFilters.map(\.rawValue).sorted()
+        }
+        return entitiesByDomain.keys.sorted()
+    }
 
     /// Returns true if any filter (excluding server) has a non-default value
     var hasActiveFilters: Bool {
@@ -56,8 +68,9 @@ final class EntityPickerViewModel: ObservableObject {
         selectedGrouping = .area
     }
 
-    init(domainFilter: Domain?, selectedServerId: String?) {
+    init(domainFilter: Domain?, domainFilters: [Domain]? = nil, selectedServerId: String?) {
         self.domainFilter = domainFilter
+        self.domainFilters = domainFilters
         self.selectedServerId = selectedServerId
         self.selectedDomainFilter = domainFilter?.rawValue
         setupFiltering()
@@ -161,6 +174,9 @@ final class EntityPickerViewModel: ObservableObject {
 
         if let domainFilter {
             groups = groups.filter { $0.key == domainFilter.rawValue }
+        } else if let domainFilters {
+            let allowedDomains = Set(domainFilters.map(\.rawValue))
+            groups = groups.filter { allowedDomains.contains($0.key) }
         }
 
         entitiesByDomain = groups
@@ -177,6 +193,7 @@ final class EntityPickerViewModel: ObservableObject {
         // Snapshot state needed for filtering
         let searchTerm = searchTerm
         let domainFilter = selectedDomainFilter
+        let allowedDomains = domainFilters.map { Set($0.map(\.rawValue)) }
         let areaFilter = selectedAreaFilter
         let grouping = selectedGrouping
         let noAreaTitle = L10n.EntityPicker.List.Area.NoArea.title
@@ -196,6 +213,7 @@ final class EntityPickerViewModel: ObservableObject {
             let filteredEntities = serverScopedEntities.filter { entity in
                 // Filter by domain if set
                 if let domainFilter, entity.domain != domainFilter { return false }
+                if domainFilter == nil, let allowedDomains, !allowedDomains.contains(entity.domain) { return false }
 
                 // Filter by area if set
                 if let areaEntityIds, !areaEntityIds.contains(entity.entityId) { return false }

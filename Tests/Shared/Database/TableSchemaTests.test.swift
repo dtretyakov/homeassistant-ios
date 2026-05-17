@@ -95,6 +95,17 @@ struct TableSchemaTests {
         )
     }
 
+    @Test("GarminConfigTable schema validation")
+    func garminConfigTableSchema() throws {
+        let table = GarminConfigTable()
+        let expectedColumns = DatabaseTables.GarminConfig.allCases.map(\.rawValue)
+        try verifyTableSchema(
+            table: table,
+            expectedTableName: GRDBDatabaseTable.garminConfig.rawValue,
+            expectedColumns: expectedColumns
+        )
+    }
+
     @Test("ServerInfoMirrorTable schema validation")
     func serverInfoMirrorTableSchema() throws {
         let table = ServerInfoMirrorTable()
@@ -231,13 +242,13 @@ struct TableSchemaTests {
         )
     }
 
-    @Test("All 17 tables create successfully together")
+    @Test("All 18 tables create successfully together")
     func allTablesCreateTogether() throws {
         let database = try DatabaseQueue(path: ":memory:")
         let tables = DatabaseQueue.tables()
 
-        // Verify we have exactly 17 tables
-        #expect(tables.count == 17, "Should have exactly 17 tables, but found \(tables.count)")
+        // Verify we have exactly 18 tables
+        #expect(tables.count == 18, "Should have exactly 18 tables, but found \(tables.count)")
 
         // Create all tables
         for table in tables {

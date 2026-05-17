@@ -47,6 +47,11 @@ final class EntityAddToHandler {
                     if isWatchSupported {
                         actions.append(WatchItemAction())
                     }
+
+                    let isGarminSupported = domain.map { GarminSupportedDomains.actionDomains.contains($0) } ?? false
+                    if GarminFeature.isEnabled, isGarminSupported, UIDevice.current.userInterfaceIdiom == .phone {
+                        actions.append(GarminItemAction())
+                    }
                 }
                 #endif
 
@@ -92,6 +97,10 @@ final class EntityAddToHandler {
                     addToWatchItems(entityId: entityId, webViewController: webViewController)
                     seal.fulfill(())
 
+                case .garminItem:
+                    addToGarminItems(entityId: entityId, webViewController: webViewController)
+                    seal.fulfill(())
+
                 case .customWidget:
                     openWidgetBuilder(
                         actionType: actionType,
@@ -108,6 +117,17 @@ final class EntityAddToHandler {
     }
 
     // MARK: - Private Methods
+
+    private func garminMagicItemType(for entityId: String) -> MagicItem.ItemType {
+        switch Domain(entityId: entityId) {
+        case .script:
+            return .script
+        case .scene:
+            return .scene
+        default:
+            return .entity
+        }
+    }
 
     private func addToCarPlayQuickAccess(entityId: String, webViewController: WebViewControllerProtocol) {
         // Navigate to CarPlay configuration screen
@@ -137,6 +157,19 @@ final class EntityAddToHandler {
         let viewController = watchSettingsView.embeddedInHostingController()
         viewController.overrideUserInterfaceStyle = .dark
         webViewController.presentOverlayController(controller: viewController, animated: true)
+    }
+
+    private func addToGarminItems(entityId: String, webViewController: WebViewControllerProtocol) {
+        Current.Log.info("Adding entity \(entityId) to Garmin")
+        let viewModel = GarminConfigurationViewModel(prefilledItem: .init(
+            id: entityId,
+            serverId: webViewController.server.identifier.rawValue,
+            type: garminMagicItemType(for: entityId)
+        ))
+        webViewController.presentOverlayController(
+            controller: GarminConfigurationView(viewModel: viewModel).embeddedInHostingController(),
+            animated: true
+        )
     }
 
     private func openWidgetBuilder(

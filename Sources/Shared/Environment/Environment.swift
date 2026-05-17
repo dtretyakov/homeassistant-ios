@@ -122,6 +122,10 @@ public class AppEnvironment {
         try AppIconShortcutConfig.config()
     }
 
+    public var garminConfig: () throws -> GarminConfig? = {
+        try GarminConfig.config()
+    }
+
     public var magicItemProvider: () -> MagicItemProviderProtocol = {
         MagicItemProvider()
     }

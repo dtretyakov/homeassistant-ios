@@ -23,6 +23,18 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		6B1FFFE48450AE340D7D7829 /* GarminConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A1BE7C1719D66F365E9C29 /* GarminConfig.swift */; };
+		106502BC3A8BE43519787940 /* GarminProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3691DEEC8D437BE3D3114209 /* GarminProfile.swift */; };
+		2A426600CEDFDC58C2BAFF21 /* GarminMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6F3997FF59959D79DBF4CDB /* GarminMessage.swift */; };
+		B57C57B6E1E93BE3902301CD /* GarminConfigTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1173CB3CECB91A9C691D638 /* GarminConfigTable.swift */; };
+		A8C2C0AB30C015EC4BE7720E /* GarminConnectIQClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE14A52938540225E2239103 /* GarminConnectIQClient.swift */; };
+		4F5EBDD1DC78D80C313FE69B /* GarminConnectIQSDKClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FCDABF7BB9E78D6BA66E7E5 /* GarminConnectIQSDKClient.swift */; };
+		16B123FA47FBC684C9136FE2 /* GarminBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F4BAD806620639E2C09698 /* GarminBridgeService.swift */; };
+		43B0E2B127220A671F4621AF /* GarminConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7AD2589C1D2DD2493A00ED9 /* GarminConfigurationView.swift */; };
+		B633853A7E625DE51B9F1B96 /* GarminConfigurationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBEB3752B43E730467AEC65D /* GarminConfigurationViewModel.swift */; };
+		24D8CD9E879A6C946B223034 /* GarminConfig.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E4EAB5B649560E43BE6AE96 /* GarminConfig.test.swift */; };
+		6088B81851D8834307C262C2 /* GarminProfile.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = A762DC20C74E558D7C644C7E /* GarminProfile.test.swift */; };
+		F8E460275348CC05BFC4FE7D /* GarminBridgeService.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10C41991647D86136386186A /* GarminBridgeService.test.swift */; };
 		00C267608DCC88B783816CBF /* FanIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D6888525DCF492642BA7EA3 /* FanIntent.swift */; };
 		01783C74005B40978CE7508B /* NotificationIdentifierField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99EC7EF1136575D0E7A17091 /* NotificationIdentifierField.swift */; };
 		072BACCC5B2509E4AF06BFED /* KioskSettingsTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14444A34DA125693568C7035 /* KioskSettingsTable.swift */; };
@@ -1891,6 +1903,18 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B4A1BE7C1719D66F365E9C29 /* GarminConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfig.swift; sourceTree = "<group>"; };
+		3691DEEC8D437BE3D3114209 /* GarminProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminProfile.swift; sourceTree = "<group>"; };
+		C6F3997FF59959D79DBF4CDB /* GarminMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminMessage.swift; sourceTree = "<group>"; };
+		C1173CB3CECB91A9C691D638 /* GarminConfigTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfigTable.swift; sourceTree = "<group>"; };
+		CE14A52938540225E2239103 /* GarminConnectIQClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConnectIQClient.swift; sourceTree = "<group>"; };
+		9FCDABF7BB9E78D6BA66E7E5 /* GarminConnectIQSDKClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConnectIQSDKClient.swift; sourceTree = "<group>"; };
+		11F4BAD806620639E2C09698 /* GarminBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminBridgeService.swift; sourceTree = "<group>"; };
+		D7AD2589C1D2DD2493A00ED9 /* GarminConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfigurationView.swift; sourceTree = "<group>"; };
+		DBEB3752B43E730467AEC65D /* GarminConfigurationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfigurationViewModel.swift; sourceTree = "<group>"; };
+		6E4EAB5B649560E43BE6AE96 /* GarminConfig.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfig.test.swift; sourceTree = "<group>"; };
+		A762DC20C74E558D7C644C7E /* GarminProfile.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminProfile.test.swift; sourceTree = "<group>"; };
+		10C41991647D86136386186A /* GarminBridgeService.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminBridgeService.test.swift; sourceTree = "<group>"; };
 		01B72DF77DFA83A5609BD22B /* Pods-iOS-App.beta.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iOS-App.beta.xcconfig"; path = "Pods/Target Support Files/Pods-iOS-App/Pods-iOS-App.beta.xcconfig"; sourceTree = "<group>"; };
 		02DC1D2083B5FBC480E4C51D /* Pods_iOS_Extensions_Matter.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_iOS_Extensions_Matter.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		06F1238D7A1FA9AC97A697AA /* Pods-iOS-Extensions-Widgets.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iOS-Extensions-Widgets.release.xcconfig"; path = "Pods/Target Support Files/Pods-iOS-Extensions-Widgets/Pods-iOS-Extensions-Widgets.release.xcconfig"; sourceTree = "<group>"; };
@@ -3717,6 +3741,53 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+
+		BF74F1435E9E42B60E996E34 /* Garmin */ = {
+			isa = PBXGroup;
+			children = (
+				B4A1BE7C1719D66F365E9C29 /* GarminConfig.swift */,
+				3691DEEC8D437BE3D3114209 /* GarminProfile.swift */,
+				C6F3997FF59959D79DBF4CDB /* GarminMessage.swift */,
+			);
+			path = Garmin;
+			sourceTree = "<group>";
+		};
+		A8C21EFBF6E723574F5EC87C /* Garmin */ = {
+			isa = PBXGroup;
+			children = (
+				CE14A52938540225E2239103 /* GarminConnectIQClient.swift */,
+				9FCDABF7BB9E78D6BA66E7E5 /* GarminConnectIQSDKClient.swift */,
+				11F4BAD806620639E2C09698 /* GarminBridgeService.swift */,
+			);
+			path = Garmin;
+			sourceTree = "<group>";
+		};
+		032831EDF43CCE369C601ECC /* Garmin */ = {
+			isa = PBXGroup;
+			children = (
+				D7AD2589C1D2DD2493A00ED9 /* GarminConfigurationView.swift */,
+				DBEB3752B43E730467AEC65D /* GarminConfigurationViewModel.swift */,
+			);
+			path = Garmin;
+			sourceTree = "<group>";
+		};
+		42F56B41EABEF280B3E361E9 /* Garmin */ = {
+			isa = PBXGroup;
+			children = (
+				6E4EAB5B649560E43BE6AE96 /* GarminConfig.test.swift */,
+				A762DC20C74E558D7C644C7E /* GarminProfile.test.swift */,
+			);
+			path = Garmin;
+			sourceTree = "<group>";
+		};
+		028E3CF75D950EA31A8BE56F /* Garmin */ = {
+			isa = PBXGroup;
+			children = (
+				10C41991647D86136386186A /* GarminBridgeService.test.swift */,
+			);
+			path = Garmin;
+			sourceTree = "<group>";
+		};
 		06D62F8A8D381DAFB70C6B31 /* Kiosk */ = {
 			isa = PBXGroup;
 			children = (
@@ -4788,6 +4859,7 @@
 				420CFC672D3F9C40009A94F3 /* WatchConfigTable.swift */,
 				420CFC6B2D3F9C6E009A94F3 /* CarPlayConfigTable.swift */,
 				AC730012000000000000AA01 /* AppIconShortcutConfigTable.swift */,
+				C1173CB3CECB91A9C691D638 /* GarminConfigTable.swift */,
 				420CFC6F2D3F9C86009A94F3 /* AssistPipelinesTable.swift */,
 				420CFC772D3F9CAB009A94F3 /* AppEntityRegistryListForDisplayTable.swift */,
 				420CFC7B2D3F9CCB009A94F3 /* AppPanelTable.swift */,
@@ -6928,6 +7000,7 @@
 			children = (
 				4210CCF62F153B7D00B71FB9 /* Cameras */,
 				B657A8E91CA646EB00121384 /* AppDelegate.swift */,
+				A8C21EFBF6E723574F5EC87C /* Garmin */,
 				11A183B22511BCF300CA326A /* LifecycleManager.swift */,
 				422F951E2CFDF7C5003B7514 /* HAApplicationShortcutItem.swift */,
 				11EFCDD424F5FA7E00314D85 /* Scenes */,
@@ -6952,6 +7025,7 @@
 			isa = PBXGroup;
 			children = (
 				429C33BE2F17988D0033EF5E /* EntityPicker */,
+				028E3CF75D950EA31A8BE56F /* Garmin */,
 				42B89EAB2E080494000224A2 /* AppConstants.test.swift */,
 				42646B762E0BE6F100F6B367 /* BackgroundTask.test.swift */,
 				11EFD3C1272642FC000AF78B /* Additions */,
@@ -6999,6 +7073,7 @@
 				429AFE5A2DB7BE3200AF0836 /* General */,
 				4211551F2D3525E800A71630 /* AppIcon */,
 				AC730020000000000000AA01 /* AppIconShortcuts */,
+				032831EDF43CCE369C601ECC /* Garmin */,
 				4278CB862D01F0BE00CFAAC9 /* Gestures */,
 				42EFFAEA2C8882CC002F10FC /* CarPlay */,
 				4251AAC32C6CF5D6004CCC9D /* MagicItem */,
@@ -7257,6 +7332,7 @@
 				429C33C02F17A6CF0033EF5E /* Models */,
 				4245DC022EBA42C3005E0E04 /* AreasService.swift */,
 				420CFC612D3F9C15009A94F3 /* Database */,
+				BF74F1435E9E42B60E996E34 /* Garmin */,
 				4278CB822D01F09400CFAAC9 /* AppGesture.swift */,
 				424D2D0F2C89DACE00C610F1 /* HAAppEntity.swift */,
 				426D9C722C9C582F00F278AF /* ControlEntityProvider.swift */,
@@ -7315,6 +7391,7 @@
 			children = (
 				421125C62F51DE9200971BAD /* StatePrecision.test.swift */,
 				420C915B2F0C7AF4005D04A6 /* Models */,
+				42F56B41EABEF280B3E361E9 /* Garmin */,
 				42ACC2A62E9F9B1E0045A3FD /* Extensions */,
 				428626002DA5CC8400D58D13 /* DesignSystem */,
 				118511C024B25BDC00D18F60 /* Webhook */,
@@ -9583,6 +9660,11 @@
 				11ADB13E24C29E6900FF5EB2 /* ZoneManagerRegionFilter.swift in Sources */,
 				11DE822E24FAC51100E636B8 /* IncomingURLHandler.swift in Sources */,
 				42A9C0022FBB000100D0C0DE /* TagApprovalBottomSheet.swift in Sources */,
+				A8C2C0AB30C015EC4BE7720E /* GarminConnectIQClient.swift in Sources */,
+				4F5EBDD1DC78D80C313FE69B /* GarminConnectIQSDKClient.swift in Sources */,
+				16B123FA47FBC684C9136FE2 /* GarminBridgeService.swift in Sources */,
+				43B0E2B127220A671F4621AF /* GarminConfigurationView.swift in Sources */,
+				B633853A7E625DE51B9F1B96 /* GarminConfigurationViewModel.swift in Sources */,
 				B657A8EA1CA646EB00121384 /* AppDelegate.swift in Sources */,
 				420E2AE72C474718004921D8 /* WidgetBasicViewModel.swift in Sources */,
 				1178C4E524D5CEB200FDEC3E /* ConnectionURLView.swift in Sources */,
@@ -9795,6 +9877,7 @@
 				42A818E32BBEA9780083D045 /* MockAudioRecorder.swift in Sources */,
 				11ED439A27265DE800B5FD45 /* OnboardingAuthStepRegister.test.swift in Sources */,
 				429C33BF2F17989F0033EF5E /* EntityPickerViewModel.test.swift in Sources */,
+				F8E460275348CC05BFC4FE7D /* GarminBridgeService.test.swift in Sources */,
 				42196AD22DA5AF3D00BD501E /* MockBonjour.swift in Sources */,
 				11EFD3C027261AA4000AF78B /* OnboardingAuthStepDeviceNaming.test.swift in Sources */,
 				42A818E52BBEAA3A0083D045 /* MockAudioPlayer.swift in Sources */,
@@ -10178,6 +10261,10 @@
 				118F046924CB895A00CBBD5C /* UIColor+CSS3+Hex.swift in Sources */,
 				AC730002000000000000AA01 /* AppIconShortcutConfig.swift in Sources */,
 				AC730004000000000000AA01 /* AppIconShortcutConfigTable.swift in Sources */,
+				B57C57B6E1E93BE3902301CD /* GarminConfigTable.swift in Sources */,
+				2A426600CEDFDC58C2BAFF21 /* GarminMessage.swift in Sources */,
+				106502BC3A8BE43519787940 /* GarminProfile.swift in Sources */,
+				6B1FFFE48450AE340D7D7829 /* GarminConfig.swift in Sources */,
 				1109F81F24A1C011002590F2 /* SensorProvider.swift in Sources */,
 				427A7CDF2EBDFB4200D17841 /* AppArea+Queries.swift in Sources */,
 				4254C4CA2D103ABB00245021 /* ExternalLink.swift in Sources */,
@@ -10505,6 +10592,8 @@
 				42A7F1012FBC000100BEEF01 /* Database/AllowedTag.test.swift in Sources */,
 				A2F3A140CDD1EF1AEA6DFAB9 /* Database/DatabaseTableProtocol.test.swift in Sources */,
 				692BCBBA4EEEABCC76DBBECA /* Database/GRDB+Initialization.test.swift in Sources */,
+				6088B81851D8834307C262C2 /* GarminProfile.test.swift in Sources */,
+				24D8CD9E879A6C946B223034 /* GarminConfig.test.swift in Sources */,
 				BECCC152A4E3F69A8EF5A6F3 /* Database/TableSchemaTests.test.swift in Sources */,
 				11267D0925BBA9FE00F28E5C /* Updater.test.swift in Sources */,
 				11A3F08C24ECE88C0018D84F /* WebhookUpdateLocation.test.swift in Sources */,

@@ -56,6 +56,7 @@ public extension DatabaseQueue {
             WatchConfigTable(),
             CarPlayConfigTable(),
             AppIconShortcutConfigTable(),
+            GarminConfigTable(),
             AssistPipelinesTable(),
             ServerInfoMirrorTable(),
             AppEntityRegistryListForDisplayTable(),
