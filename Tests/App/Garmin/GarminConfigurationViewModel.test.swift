@@ -86,13 +86,13 @@ struct GarminConfigurationViewModelTests {
         }
     }
 
-    @Test func updateGuardedActionCannotClearConfirmation() throws {
+    @Test func updateSafeActionCanClearConfirmation() throws {
         try withViewModel { viewModel in
             let item = MagicItem(
-                id: "cover.garage",
+                id: "switch.office",
                 serverId: "server-1",
                 type: .entity,
-                customization: .init(requiresConfirmation: false)
+                customization: .init(requiresConfirmation: true)
             )
             viewModel.addAction(item)
 
@@ -100,7 +100,25 @@ struct GarminConfigurationViewModelTests {
             updated.customization?.requiresConfirmation = false
             viewModel.updateAction(updated)
 
-            #expect(viewModel.config.actionItems.first?.customization?.requiresConfirmation == true)
+            #expect(viewModel.config.actionItems.first?.customization?.requiresConfirmation == false)
+        }
+    }
+
+    @Test func updateCoverActionCanClearConfirmation() throws {
+        try withViewModel { viewModel in
+            let item = MagicItem(
+                id: "cover.garage",
+                serverId: "server-1",
+                type: .entity,
+                customization: .init(requiresConfirmation: true)
+            )
+            viewModel.addAction(item)
+
+            var updated = item
+            updated.customization?.requiresConfirmation = false
+            viewModel.updateAction(updated)
+
+            #expect(viewModel.config.actionItems.first?.customization?.requiresConfirmation == false)
         }
     }
 

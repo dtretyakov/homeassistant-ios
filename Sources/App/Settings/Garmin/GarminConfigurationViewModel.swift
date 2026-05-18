@@ -54,7 +54,6 @@ final class GarminConfigurationViewModel: ObservableObject {
             showError(message: "Garmin supports up to \(GarminConfig.maxActionItems) favorite actions.")
             return
         }
-        let item = actionWithRequiredConfirmationIfNeeded(item)
         if config.selectedServerId == nil {
             config.selectedServerId = item.serverId
         }
@@ -100,7 +99,7 @@ final class GarminConfigurationViewModel: ObservableObject {
 
     func updateAction(_ item: MagicItem) {
         if let index = config.actionItems.firstIndex(where: { $0.id == item.id && $0.serverId == item.serverId }) {
-            config.actionItems[index] = actionWithRequiredConfirmationIfNeeded(item)
+            config.actionItems[index] = item
             save()
         }
     }
@@ -207,14 +206,6 @@ final class GarminConfigurationViewModel: ObservableObject {
         guard let prefilledItem, !didApplyPrefilledItem else { return }
         didApplyPrefilledItem = true
         addAction(prefilledItem)
-    }
-
-    private func actionWithRequiredConfirmationIfNeeded(_ item: MagicItem) -> MagicItem {
-        guard GarminSupportedDomains.requiresConfirmation(item) else { return item }
-        var item = item
-        item.customization = item.customization ?? .init()
-        item.customization?.requiresConfirmation = true
-        return item
     }
 
     private func loadDiscovery() {

@@ -36,6 +36,7 @@ struct GarminEntityDiscoveryServiceTests {
             .garmin("input_boolean.guest_mode", name: "Guest Mode"),
             .garmin("light.kitchen", name: "Kitchen"),
             .garmin("switch.pump", name: "Pump"),
+            .garmin("cover.garage", name: "Garage"),
             .garmin("climate.hallway", name: "Hallway"),
         ]).discover(serverId: "server-1")
 
@@ -45,11 +46,12 @@ struct GarminEntityDiscoveryServiceTests {
         #expect(actionIds.contains("input_boolean.guest_mode"))
         #expect(actionIds.contains("light.kitchen"))
         #expect(actionIds.contains("switch.pump"))
+        #expect(actionIds.contains("cover.garage"))
         #expect(!actionIds.contains("climate.hallway"))
         #expect(result.actionsByDomain[Domain.light.rawValue]?.map(\.entityId) == ["light.kitchen"])
     }
 
-    @Test func marksRiskyExecutableActionsAsConfirmationRequired() throws {
+    @Test func coverIsActionAndStatusWithoutForcedConfirmation() throws {
         let result = try makeService(entities: [
             .garmin("lock.front_door", name: "Front Door"),
             .garmin("cover.garage", name: "Garage"),
@@ -60,8 +62,9 @@ struct GarminEntityDiscoveryServiceTests {
         #expect(!lock.supportsAction)
         #expect(lock.supportsStatus)
         #expect(cover.supportsAction)
-        #expect(cover.requiresConfirmation)
-        #expect(cover.magicItem().customization?.requiresConfirmation == true)
+        #expect(cover.supportsStatus)
+        #expect(!cover.requiresConfirmation)
+        #expect(cover.magicItem().customization?.requiresConfirmation == false)
     }
 
     @Test func discoversStatusDomainsIncludingRawHomeAssistantDomains() throws {

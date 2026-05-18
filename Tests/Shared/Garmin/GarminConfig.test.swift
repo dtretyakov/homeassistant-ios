@@ -58,8 +58,6 @@ struct GarminConfigTests {
         #expect(GarminSupportedDomains.supportsAction(.inputBoolean))
         #expect(!GarminSupportedDomains.supportsAction(.lock))
         #expect(GarminSupportedDomains.supportsAction(.cover))
-        #expect(!GarminSupportedDomains.requiresConfirmation(rawDomain: Domain.lock.rawValue))
-        #expect(GarminSupportedDomains.requiresConfirmation(rawDomain: Domain.cover.rawValue))
         #expect(GarminSupportedDomains.supportsStatus(rawDomain: Domain.sensor.rawValue))
         #expect(GarminSupportedDomains.supportsStatus(rawDomain: Domain.lock.rawValue))
         #expect(GarminSupportedDomains.supportsStatus(rawDomain: "alarm_control_panel"))

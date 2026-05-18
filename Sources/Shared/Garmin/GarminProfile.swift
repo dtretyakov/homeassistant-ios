@@ -54,6 +54,13 @@ public struct GarminProfileAction: Codable, Equatable {
         self.iconName = iconName
         self.requiresConfirmation = requiresConfirmation
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case iconName = "icon_name"
+        case requiresConfirmation = "requires_confirmation"
+    }
 }
 
 public struct GarminProfileStatus: Codable, Equatable {
@@ -65,6 +72,12 @@ public struct GarminProfileStatus: Codable, Equatable {
         self.id = id
         self.label = label
         self.iconName = iconName
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case iconName = "icon_name"
     }
 }
 
@@ -104,6 +117,13 @@ public struct GarminStatusValue: Codable, Equatable {
         self.label = label
         self.value = value
         self.iconName = iconName
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case value
+        case iconName = "icon_name"
     }
 }
 

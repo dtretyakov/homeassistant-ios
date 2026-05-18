@@ -197,7 +197,7 @@ final class GarminEntityDiscoveryService {
             icon: entity.icon,
             areaName: areaName,
             candidateKind: kind,
-            requiresConfirmation: GarminSupportedDomains.requiresConfirmation(rawDomain: entity.domain),
+            requiresConfirmation: false,
             score: score(entity: entity, supportsAction: supportsAction, supportsStatus: supportsStatus)
         )
     }
@@ -242,7 +242,7 @@ final class GarminEntityDiscoveryService {
                 actionScore = 80
             case "switch":
                 actionScore = 70
-            case "lock", "cover":
+            case "cover":
                 actionScore = 45
             default:
                 break

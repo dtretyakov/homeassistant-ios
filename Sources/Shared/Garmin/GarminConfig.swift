@@ -73,21 +73,14 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
 }
 
 public enum GarminSupportedDomains {
-    public static var safeActionDomains: [Domain] = [
+    public static var actionDomains: [Domain] = [
         .scene,
         .script,
         .light,
         .switch,
         .inputBoolean,
-    ]
-
-    public static var guardedActionDomains: [Domain] = [
         .cover,
     ]
-
-    public static var actionDomains: [Domain] {
-        safeActionDomains + guardedActionDomains
-    }
 
     public static var actionDomainRawValues: [String] {
         actionDomains.map(\.rawValue)
@@ -121,14 +114,6 @@ public enum GarminSupportedDomains {
 
     public static func supportsStatus(_ item: MagicItem) -> Bool {
         supportsStatus(rawDomain: rawDomain(for: item))
-    }
-
-    public static func requiresConfirmation(rawDomain: String) -> Bool {
-        guardedActionDomains.map(\.rawValue).contains(rawDomain)
-    }
-
-    public static func requiresConfirmation(_ item: MagicItem) -> Bool {
-        requiresConfirmation(rawDomain: rawDomain(for: item))
     }
 
     public static func supportsAction(_ item: MagicItem) -> Bool {

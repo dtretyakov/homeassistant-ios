@@ -207,14 +207,7 @@ private enum GarminActionExecutor {
         let request: Promise<Void>?
         switch item.type {
         case .script:
-            let domain = Domain.script.rawValue
-            request = api.CallService(
-                domain: domain,
-                service: item.id.replacingOccurrences(of: "\(domain).", with: ""),
-                serviceData: [:],
-                triggerSource: .Garmin,
-                shouldLog: true
-            )
+            request = api.turnOnScript(scriptEntityId: item.id, triggerSource: .Garmin)
         case .scene:
             request = api.CallService(
                 domain: Domain.scene.rawValue,

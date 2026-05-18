@@ -48,6 +48,28 @@ struct GarminProfileTests {
         #expect(profile.actions.map(\.requiresConfirmation) == [true, false])
     }
 
+    @Test func profileEncodingUsesStableSnakeCaseKeys() throws {
+        let profile = GarminProfile(
+            actions: [
+                .init(
+                    id: "garmin_action_1",
+                    label: "Garage",
+                    iconName: "mdi:garage",
+                    requiresConfirmation: true
+                ),
+            ],
+            statuses: [
+                .init(id: "garmin_status_1", label: "Garage", iconName: "mdi:garage"),
+            ]
+        )
+        let encoded = try String(decoding: JSONEncoder().encode(profile), as: UTF8.self)
+
+        #expect(encoded.contains("\"icon_name\""))
+        #expect(encoded.contains("\"requires_confirmation\""))
+        #expect(!encoded.contains("\"iconName\""))
+        #expect(!encoded.contains("\"requiresConfirmation\""))
+    }
+
     @Test func profilePreservesStatusOrderLabelsAndOpaqueIds() throws {
         let first = MagicItem(
             id: "sensor.temperature",
