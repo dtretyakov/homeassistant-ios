@@ -60,6 +60,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     private var watchCommunicatorService: WatchCommunicatorService?
     private var garminBridgeService: GarminBridgeService?
+    private var garminStatusObservationService: GarminStatusObservationService?
 
     func application(
         _ application: UIApplication,
@@ -384,22 +385,31 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         guard GarminFeature.isEnabled, UIDevice.current.userInterfaceIdiom == .phone else { return }
         let magicItemProvider = Current.magicItemProvider()
         magicItemProvider.loadInformation { _ in }
-        let service = GarminBridgeService()
+        let client = GarminConnectIQSDKClient()
+        let service = GarminBridgeService(client: client)
         let statusSnapshotService = GarminStatusSnapshotService()
+        let statusSnapshotProvider: GarminStatusObservationService.SnapshotProvider = { config, completion in
+            Task {
+                let result = await statusSnapshotService.snapshotWithCacheFallback(
+                    config: config,
+                    itemInfo: { magicItemProvider.getInfo(for: $0) }
+                )
+                completion(result)
+            }
+        }
         service.setup(
             configProvider: { try? Current.garminConfig() },
             itemInfoProvider: { magicItemProvider.getInfo(for: $0) },
-            statusSnapshotProvider: { config, completion in
-                Task {
-                    let result = await statusSnapshotService.snapshotWithCacheFallback(
-                        config: config,
-                        itemInfo: { magicItemProvider.getInfo(for: $0) }
-                    )
-                    completion(result)
-                }
-            }
+            statusSnapshotProvider: statusSnapshotProvider
         )
+        let observationService = GarminStatusObservationService(
+            client: client,
+            configProvider: { try? Current.garminConfig() },
+            snapshotProvider: statusSnapshotProvider
+        )
+        observationService.start()
         garminBridgeService = service
+        garminStatusObservationService = observationService
         #endif
     }
 
