@@ -83,17 +83,20 @@ public struct GarminProfileStatus: Codable, Equatable {
 
 public struct GarminStatusSnapshot: Codable, Equatable {
     public let statuses: [GarminStatusValue]
+    public let updatedAt: TimeInterval
 
-    public init(statuses: [GarminStatusValue]) {
+    public init(statuses: [GarminStatusValue], updatedAt: TimeInterval = Date().timeIntervalSince1970) {
         self.statuses = statuses
+        self.updatedAt = updatedAt
     }
 
     public init(
         config: GarminConfig,
         itemInfo: (MagicItem) -> MagicItem.Info?,
-        valueProvider: (MagicItem) -> String?
+        valueProvider: (MagicItem) -> String?,
+        updatedAt: TimeInterval = Date().timeIntervalSince1970
     ) {
-        self.init(statuses: config.statusItems.compactMap { item in
+        self.init(statuses: config.statusItems.prefix(GarminConfig.maxStatusItems).compactMap { item in
             guard GarminSupportedDomains.supportsStatus(item) else { return nil }
             let info = itemInfo(item)
             return GarminStatusValue(
@@ -102,7 +105,12 @@ public struct GarminStatusSnapshot: Codable, Equatable {
                 value: valueProvider(item) ?? "",
                 iconName: item.customization?.icon ?? info?.iconName
             )
-        })
+        }, updatedAt: updatedAt)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case statuses
+        case updatedAt = "updated_at"
     }
 }
 

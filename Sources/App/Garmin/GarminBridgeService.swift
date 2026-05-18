@@ -6,13 +6,16 @@ import Shared
 final class GarminBridgeService {
     typealias ActionExecutor = (MagicItem, Server, @escaping (Swift.Result<Void, GarminBridgeError>) -> Void) -> Void
     typealias ItemInfoProvider = (MagicItem) -> MagicItem.Info?
-    typealias StatusValueProvider = (MagicItem) -> String?
+    typealias StatusSnapshotProvider = (
+        GarminConfig,
+        @escaping (Swift.Result<GarminStatusSnapshot, GarminBridgeError>) -> Void
+    ) -> Void
 
     private let client: GarminConnectIQClient
     private let actionExecutor: ActionExecutor
     private var currentConfigProvider: (() -> GarminConfig?)?
     private var currentItemInfoProvider: ItemInfoProvider?
-    private var currentStatusValueProvider: StatusValueProvider?
+    private var currentStatusSnapshotProvider: StatusSnapshotProvider?
 
     var connectionState: GarminConnectionState { client.state }
 
@@ -27,11 +30,11 @@ final class GarminBridgeService {
     func setup(
         configProvider: @escaping () -> GarminConfig?,
         itemInfoProvider: ItemInfoProvider? = nil,
-        statusValueProvider: StatusValueProvider? = nil
+        statusSnapshotProvider: StatusSnapshotProvider? = nil
     ) {
         currentConfigProvider = configProvider
         currentItemInfoProvider = itemInfoProvider
-        currentStatusValueProvider = statusValueProvider
+        currentStatusSnapshotProvider = statusSnapshotProvider
         client.setup { [weak self] message in
             self?.handle(message)
         }
@@ -113,17 +116,20 @@ final class GarminBridgeService {
             completion(.init(correlationId: correlationId, state: .failed, error: error(for: client.state)))
             return
         }
-        guard let currentStatusValueProvider else {
+        guard let currentStatusSnapshotProvider else {
             send(.init(correlationId: correlationId, state: .failed, error: .unsupportedStatus), completion: completion)
             return
         }
-        let snapshot = GarminStatusSnapshot(
-            config: config,
-            itemInfo: currentItemInfoProvider ?? { _ in nil },
-            valueProvider: currentStatusValueProvider
-        )
-        client.sendStatusSnapshot(snapshot) { [weak self] result in
-            self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
+
+        currentStatusSnapshotProvider(config) { [weak self] snapshotResult in
+            switch snapshotResult {
+            case let .success(snapshot):
+                self?.client.sendStatusSnapshot(snapshot) { [weak self] result in
+                    self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
+                }
+            case let .failure(error):
+                self?.send(.init(correlationId: correlationId, state: .failed, error: error), completion: completion)
+            }
         }
     }
 

@@ -27,10 +27,10 @@ struct GRDBInitializationTests {
         )
     }
 
-    @Test("Tables returns exactly 18 tables")
-    func tablesReturns18Tables() throws {
+    @Test("Tables returns exactly 19 tables")
+    func tablesReturns19Tables() throws {
         let tables = DatabaseQueue.tables()
-        #expect(tables.count == 18, "DatabaseQueue.tables() should return exactly 18 tables")
+        #expect(tables.count == 19, "DatabaseQueue.tables() should return exactly 19 tables")
     }
 
     @Test("Tables contains all expected table names")
@@ -45,6 +45,7 @@ struct GRDBInitializationTests {
             GRDBDatabaseTable.carPlayConfig.rawValue,
             GRDBDatabaseTable.appIconShortcutConfig.rawValue,
             GRDBDatabaseTable.garminConfig.rawValue,
+            GRDBDatabaseTable.garminStatusSnapshotCache.rawValue,
             GRDBDatabaseTable.assistPipelines.rawValue,
             GRDBDatabaseTable.serverInfoMirror.rawValue,
             GRDBDatabaseTable.appEntityRegistryListForDisplay.rawValue,

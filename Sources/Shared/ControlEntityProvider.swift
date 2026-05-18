@@ -27,6 +27,11 @@ public final class ControlEntityProvider {
         }
     }
 
+    public enum StateFetchError: Swift.Error {
+        case missingConnection
+        case invalidResponse
+    }
+
     public let domains: [Domain]
 
     public init(domains: [Domain]) {
@@ -113,9 +118,18 @@ public final class ControlEntityProvider {
     }
 
     public func state(server: Server, entityId: String) async -> State? {
+        do {
+            return try await stateResult(server: server, entityId: entityId)
+        } catch {
+            Current.Log.error("Failed to get state: \(error)")
+            return nil
+        }
+    }
+
+    public func stateResult(server: Server, entityId: String) async throws -> State {
         guard let connection = Current.api(for: server)?.connection else {
             Current.Log.error("No API available to fetch state data")
-            return nil
+            throw StateFetchError.missingConnection
         }
 
         let result = await withCheckedContinuation { continuation in
@@ -127,16 +141,11 @@ public final class ControlEntityProvider {
             }
         }
 
-        guard let data = try? result.get() else {
-            if case let .failure(error) = result {
-                Current.Log.error("Failed to get state: \(error)")
-            }
-            return nil
-        }
+        let data = try result.get()
 
         guard case let .dictionary(state) = data else {
             Current.Log.error("Failed to get state bad response data")
-            return nil
+            throw StateFetchError.invalidResponse
         }
 
         var stateValue = (state["state"] as? String) ?? "N/A"

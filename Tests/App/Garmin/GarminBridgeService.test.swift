@@ -19,12 +19,18 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
         completion(.success(()))
     }
 
-    func sendStatusSnapshot(_ snapshot: GarminStatusSnapshot, completion: @escaping (Result<Void, GarminBridgeError>) -> Void) {
+    func sendStatusSnapshot(
+        _ snapshot: GarminStatusSnapshot,
+        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+    ) {
         sentStatusSnapshots.append(snapshot)
         completion(.success(()))
     }
 
-    func sendActionResult(_ result: GarminCommandResult, completion: @escaping (Result<Void, GarminBridgeError>) -> Void) {
+    func sendActionResult(
+        _ result: GarminCommandResult,
+        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+    ) {
         sentResults.append(result)
         completion(.success(()))
     }
@@ -80,6 +86,50 @@ struct GarminBridgeServiceTests {
         #expect(handledResult?.state == .failed)
         #expect(handledResult?.error == .unsupportedStatus)
         #expect(client.sentStatusSnapshots.isEmpty)
+    }
+
+    @Test func requestStatusSendsProviderSnapshot() throws {
+        let client = FakeGarminConnectIQClient()
+        let service = GarminBridgeService(client: client)
+        let snapshot = GarminStatusSnapshot(
+            statuses: [.init(id: "garmin_status_1", label: "Temperature", value: "22 °C")],
+            updatedAt: 1_710_000_000
+        )
+        let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
+        var handledResult: GarminCommandResult?
+
+        service.setup(
+            configProvider: { GarminConfig() },
+            statusSnapshotProvider: { _, completion in completion(.success(snapshot)) }
+        )
+        service.handle(message, config: GarminConfig()) { result in
+            handledResult = result
+        }
+
+        #expect(handledResult?.state == .success)
+        #expect(handledResult?.correlationId == "c1")
+        #expect(client.sentStatusSnapshots == [snapshot])
+    }
+
+    @Test func requestStatusProviderFailureSendsExplicitError() throws {
+        let client = FakeGarminConnectIQClient()
+        let service = GarminBridgeService(client: client)
+        let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
+        var handledResult: GarminCommandResult?
+
+        service.setup(
+            configProvider: { GarminConfig() },
+            statusSnapshotProvider: { _, completion in completion(.failure(.homeAssistantUnavailable)) }
+        )
+        service.handle(message, config: GarminConfig()) { result in
+            handledResult = result
+        }
+
+        #expect(handledResult?.state == .failed)
+        #expect(handledResult?.error == .homeAssistantUnavailable)
+        #expect(handledResult?.correlationId == "c1")
+        #expect(client.sentStatusSnapshots.isEmpty)
+        #expect(client.sentResults.first?.error == .homeAssistantUnavailable)
     }
 
     @Test func missingConfigSendsResultForInboundMessage() throws {

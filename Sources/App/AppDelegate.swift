@@ -385,9 +385,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let magicItemProvider = Current.magicItemProvider()
         magicItemProvider.loadInformation { _ in }
         let service = GarminBridgeService()
+        let statusSnapshotService = GarminStatusSnapshotService()
         service.setup(
             configProvider: { try? Current.garminConfig() },
-            itemInfoProvider: { magicItemProvider.getInfo(for: $0) }
+            itemInfoProvider: { magicItemProvider.getInfo(for: $0) },
+            statusSnapshotProvider: { config, completion in
+                Task {
+                    let result = await statusSnapshotService.snapshotWithCacheFallback(
+                        config: config,
+                        itemInfo: { magicItemProvider.getInfo(for: $0) }
+                    )
+                    completion(result)
+                }
+            }
         )
         garminBridgeService = service
         #endif

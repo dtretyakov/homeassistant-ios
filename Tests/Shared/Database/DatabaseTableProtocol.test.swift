@@ -55,6 +55,16 @@ struct DatabaseTableProtocolTests {
         #expect(Set(table.definedColumns) == Set(expectedColumns))
     }
 
+    @Test("GarminStatusSnapshotCacheTable conforms to DatabaseTableProtocol")
+    func garminStatusSnapshotCacheTableConformance() throws {
+        let table = GarminStatusSnapshotCacheTable()
+        #expect(table.tableName == GRDBDatabaseTable.garminStatusSnapshotCache.rawValue)
+        #expect(!table.definedColumns.isEmpty, "definedColumns should not be empty")
+
+        let expectedColumns = DatabaseTables.GarminStatusSnapshotCache.allCases.map(\.rawValue)
+        #expect(Set(table.definedColumns) == Set(expectedColumns))
+    }
+
     @Test("AssistPipelinesTable conforms to DatabaseTableProtocol")
     func assistPipelinesTableConformance() throws {
         let table = AssistPipelinesTable()
@@ -183,10 +193,10 @@ struct DatabaseTableProtocolTests {
         #expect(Set(table.definedColumns) == Set(expectedColumns))
     }
 
-    @Test("All 18 tables conform to DatabaseTableProtocol")
+    @Test("All 19 tables conform to DatabaseTableProtocol")
     func allTablesConformToProtocol() throws {
         let tables = DatabaseQueue.tables()
-        #expect(tables.count == 18, "Should have exactly 18 tables")
+        #expect(tables.count == 19, "Should have exactly 19 tables")
 
         for table in tables {
             // Verify each table has a non-empty tableName
