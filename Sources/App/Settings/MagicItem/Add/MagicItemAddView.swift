@@ -25,6 +25,7 @@ struct MagicItemAddView: View {
     private let visiblePickerOptions: [PickerOption]
     private let initialItemType: MagicItemAddType
     private let garminRawDomainFilters: [String]?
+    private let showsConfirmationToggle: Bool
 
     let context: Context
     let itemToAdd: (MagicItem?) -> Void
@@ -34,10 +35,12 @@ struct MagicItemAddView: View {
         initialItemType: MagicItemAddType? = nil,
         visiblePickerOptions: [PickerOption]? = nil,
         garminRawDomainFilters: [String]? = nil,
+        showsConfirmationToggle: Bool = true,
         itemToAdd: @escaping (MagicItem?) -> Void
     ) {
         self.context = context
         self.itemToAdd = itemToAdd
+        self.showsConfirmationToggle = showsConfirmationToggle
         self.garminRawDomainFilters = garminRawDomainFilters ?? (
             context == .garmin ? GarminSupportedDomains.actionDomainRawValues : nil
         )
@@ -260,7 +263,8 @@ struct MagicItemAddView: View {
                             id: selectedEntity.entityId,
                             serverId: selectedEntity.serverId,
                             type: context == .garmin ? garminMagicItemType(for: selectedEntity) : .entity
-                        )
+                        ),
+                        showsConfirmationToggle: showsConfirmationToggle
                     ) { itemToAdd in
                         self.itemToAdd(itemToAdd)
                         dismiss()

@@ -18,16 +18,19 @@ struct MagicItemCustomizationView: View {
     /// Context in which the screen will be presented, editing existent Magic Item or adding new
     let mode: Mode
     let context: MagicItemAddView.Context
+    let showsConfirmationToggle: Bool
     let addItem: (MagicItem) -> Void
 
     init(
         mode: Mode,
         context: MagicItemAddView.Context,
         item: MagicItem,
+        showsConfirmationToggle: Bool = true,
         addItem: @escaping (MagicItem) -> Void
     ) {
         self.mode = mode
         self.context = context
+        self.showsConfirmationToggle = showsConfirmationToggle
         self._viewModel = .init(wrappedValue: .init(item: item))
         self.addItem = addItem
     }
@@ -233,7 +236,7 @@ struct MagicItemCustomizationView: View {
                 scriptActionDetails
             }
         }
-        if !(context == .carPlay && viewModel.item.type == .assistPipeline) {
+        if showsConfirmationToggle && !(context == .carPlay && viewModel.item.type == .assistPipeline) {
             Section {
                 Toggle(L10n.MagicItem.RequireConfirmation.title, isOn: .init(get: {
                     if isGarminGuardedAction {

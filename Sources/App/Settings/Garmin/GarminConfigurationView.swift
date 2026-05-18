@@ -30,7 +30,7 @@ struct GarminConfigurationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if !viewModel.config.actionItems.isEmpty {
+                if !viewModel.config.actionItems.isEmpty || !viewModel.config.statusItems.isEmpty {
                     EditButton()
                 }
             }
@@ -56,7 +56,8 @@ struct GarminConfigurationView: View {
                     context: .garmin,
                     initialItemType: .entities,
                     visiblePickerOptions: [.entities],
-                    garminRawDomainFilters: Array(GarminSupportedDomains.statusDomainRawValues)
+                    garminRawDomainFilters: Array(GarminSupportedDomains.statusDomainRawValues),
+                    showsConfirmationToggle: false
                 ) { item in
                     guard let item else { return }
                     viewModel.addStatus(item)
@@ -155,10 +156,24 @@ struct GarminConfigurationView: View {
     private var statusSection: some View {
         Section("Statuses") {
             ForEach(viewModel.config.statusItems, id: \.serverUniqueId) { item in
-                magicItemRow(item)
+                NavigationLink {
+                    MagicItemCustomizationView(
+                        mode: .edit,
+                        context: .garmin,
+                        item: item,
+                        showsConfirmationToggle: false
+                    ) { updatedItem in
+                        viewModel.updateStatus(updatedItem)
+                    }
+                } label: {
+                    magicItemRow(item)
+                }
             }
             .onDelete { offsets in
                 viewModel.deleteStatus(at: offsets)
+            }
+            .onMove { source, destination in
+                viewModel.moveStatus(from: source, to: destination)
             }
             Button {
                 viewModel.showAddStatus = true

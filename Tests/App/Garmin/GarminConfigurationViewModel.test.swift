@@ -141,13 +141,115 @@ struct GarminConfigurationViewModelTests {
         }
     }
 
+    @Test func addSupportedStatusStoresItemLocally() throws {
+        try withViewModel { viewModel in
+            let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
+
+            viewModel.addStatus(item)
+
+            #expect(viewModel.config.statusItems == [item])
+            #expect(try GarminConfig.config()?.statusItems == [item])
+        }
+    }
+
+    @Test func duplicateStatusIsIgnored() throws {
+        try withViewModel { viewModel in
+            let item = MagicItem(id: "binary_sensor.front_door", serverId: "server-1", type: .entity)
+
+            viewModel.addStatus(item)
+            viewModel.addStatus(item)
+
+            #expect(viewModel.config.statusItems == [item])
+        }
+    }
+
+    @Test func deleteStatusRemovesItem() throws {
+        try withViewModel { viewModel in
+            let first = MagicItem(id: "sensor.first", serverId: "server-1", type: .entity)
+            let second = MagicItem(id: "sensor.second", serverId: "server-1", type: .entity)
+            viewModel.addStatus(first)
+            viewModel.addStatus(second)
+
+            viewModel.deleteStatus(at: IndexSet(integer: 0))
+
+            #expect(viewModel.config.statusItems == [second])
+        }
+    }
+
+    @Test func moveStatusPreservesNewOrder() throws {
+        try withViewModel { viewModel in
+            let first = MagicItem(id: "sensor.first", serverId: "server-1", type: .entity)
+            let second = MagicItem(id: "sensor.second", serverId: "server-1", type: .entity)
+            let third = MagicItem(id: "sensor.third", serverId: "server-1", type: .entity)
+            viewModel.addStatus(first)
+            viewModel.addStatus(second)
+            viewModel.addStatus(third)
+
+            viewModel.moveStatus(from: IndexSet(integer: 0), to: 3)
+
+            #expect(viewModel.config.statusItems == [second, third, first])
+        }
+    }
+
+    @Test func updateStatusChangesDisplayText() throws {
+        try withViewModel { viewModel in
+            let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
+            viewModel.addStatus(item)
+
+            var updated = item
+            updated.displayText = "Temperature"
+            viewModel.updateStatus(updated)
+
+            #expect(viewModel.config.statusItems.first?.displayText == "Temperature")
+        }
+    }
+
+    @Test func addStatusRefusesSixthItem() throws {
+        try withViewModel { viewModel in
+            for index in 0..<GarminConfig.maxStatusItems {
+                viewModel.addStatus(MagicItem(
+                    id: "sensor.item_\(index)",
+                    serverId: "server-1",
+                    type: .entity
+                ))
+            }
+
+            viewModel.addStatus(MagicItem(
+                id: "sensor.item_\(GarminConfig.maxStatusItems)",
+                serverId: "server-1",
+                type: .entity
+            ))
+
+            #expect(viewModel.config.statusItems.count == GarminConfig.maxStatusItems)
+        }
+    }
+
+    @Test func syncRefusesOversizedLegacyStatusConfig() throws {
+        try withViewModel { viewModel, client in
+            viewModel.config.statusItems = (0...GarminConfig.maxStatusItems).map { index in
+                MagicItem(
+                    id: "sensor.item_\(index)",
+                    serverId: "server-1",
+                    type: .entity
+                )
+            }
+
+            viewModel.sync()
+
+            #expect(viewModel.config.statusItems.count == GarminConfig.maxStatusItems + 1)
+            #expect(client.sentProfiles.isEmpty)
+        }
+    }
+
     private func withViewModel(_ body: (GarminConfigurationViewModel) throws -> Void) throws {
         try withViewModel { viewModel, _ in
             try body(viewModel)
         }
     }
 
-    private func withViewModel(_ body: (GarminConfigurationViewModel, FakeGarminConnectIQClient) throws -> Void) throws {
+    private func withViewModel(
+        _ body: (GarminConfigurationViewModel, FakeGarminConnectIQClient) throws -> Void
+    ) throws {
         let database = try DatabaseQueue(path: ":memory:")
         try GarminConfigTable().createIfNeeded(database: database)
         let previousDatabase = Current.database

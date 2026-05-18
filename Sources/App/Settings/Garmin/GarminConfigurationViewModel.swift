@@ -65,6 +65,10 @@ final class GarminConfigurationViewModel: ObservableObject {
     func addStatus(_ item: MagicItem) {
         guard GarminSupportedDomains.supportsStatus(item) else { return }
         guard !config.statusItems.contains(where: { $0.serverUniqueId == item.serverUniqueId }) else { return }
+        guard config.statusItems.count < GarminConfig.maxStatusItems else {
+            showError(message: "Garmin supports up to \(GarminConfig.maxStatusItems) status items.")
+            return
+        }
         if config.selectedServerId == nil {
             config.selectedServerId = item.serverId
         }
@@ -101,6 +105,13 @@ final class GarminConfigurationViewModel: ObservableObject {
         }
     }
 
+    func updateStatus(_ item: MagicItem) {
+        if let index = config.statusItems.firstIndex(where: { $0.id == item.id && $0.serverId == item.serverId }) {
+            config.statusItems[index] = item
+            save()
+        }
+    }
+
     func deleteAction(at offsets: IndexSet) {
         config.actionItems.remove(atOffsets: offsets)
         save()
@@ -116,9 +127,18 @@ final class GarminConfigurationViewModel: ObservableObject {
         save()
     }
 
+    func moveStatus(from source: IndexSet, to destination: Int) {
+        config.statusItems.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
     func sync() {
         guard config.actionItems.count <= GarminConfig.maxActionItems else {
             showError(message: "Garmin supports up to \(GarminConfig.maxActionItems) favorite actions.")
+            return
+        }
+        guard config.statusItems.count <= GarminConfig.maxStatusItems else {
+            showError(message: "Garmin supports up to \(GarminConfig.maxStatusItems) status items.")
             return
         }
         connectionState = bridgeService.connectionState

@@ -47,4 +47,28 @@ struct GarminProfileTests {
         #expect(profile.actions.map(\.label) == ["Movie", "Kitchen"])
         #expect(profile.actions.map(\.requiresConfirmation) == [true, false])
     }
+
+    @Test func profilePreservesStatusOrderLabelsAndOpaqueIds() throws {
+        let first = MagicItem(
+            id: "sensor.temperature",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Temperature"
+        )
+        let second = MagicItem(
+            id: "binary_sensor.front_door",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Front door"
+        )
+        let config = GarminConfig(statusItems: [first, second])
+
+        let profile = GarminProfile(config: config) { _ in nil }
+
+        #expect(profile.statuses.map(\.label) == ["Temperature", "Front door"])
+        #expect(profile.statuses.map(\.id) == [
+            GarminConfig.opaqueStatusId(for: first),
+            GarminConfig.opaqueStatusId(for: second),
+        ])
+    }
 }

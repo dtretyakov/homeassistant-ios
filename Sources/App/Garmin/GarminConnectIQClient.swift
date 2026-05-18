@@ -10,7 +10,7 @@ enum GarminFeature {
         #endif
     }
 
-    static var supportsStatusItems: Bool { false }
+    static var supportsStatusItems: Bool { true }
 }
 
 protocol GarminConnectIQClient: AnyObject {
