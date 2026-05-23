@@ -8,6 +8,10 @@ final class GarminConnectIQSDKClient: GarminConnectIQClient {
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {
         self.commandHandler = commandHandler
         state = .sdkUnavailable
+        GarminDiagnostics.record(.sdk, status: .unavailable, metadata: [
+            "sdk_state": "sdk_unavailable",
+            "connection_state": GarminDiagnostics.connectionState(state),
+        ])
     }
 
     func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminBridgeError>) -> Void) {

@@ -16,6 +16,7 @@ public struct ClientEvent: Codable, FetchableRecord, PersistableRecord {
         case settings
         case database
         case backgroundOperation
+        case garmin
         case unknown
     }
 
@@ -140,6 +141,8 @@ public extension ClientEvent.EventType {
             return L10n.ClientEvents.EventType.database
         case .backgroundOperation:
             return L10n.ClientEvents.EventType.backgroundOperation
+        case .garmin:
+            return L10n.ClientEvents.EventType.garmin
         }
     }
 }

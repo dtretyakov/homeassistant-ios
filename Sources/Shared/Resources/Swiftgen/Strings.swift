@@ -1116,6 +1116,8 @@ public enum L10n {
       public static var backgroundOperation: String { return L10n.tr("Localizable", "client_events.event_type.background_operation") }
       /// Database
       public static var database: String { return L10n.tr("Localizable", "client_events.event_type.database") }
+      /// Garmin
+      public static var garmin: String { return L10n.tr("Localizable", "client_events.event_type.garmin") }
       /// Location Update
       public static var locationUpdate: String { return L10n.tr("Localizable", "client_events.event_type.location_update") }
       /// Network Request

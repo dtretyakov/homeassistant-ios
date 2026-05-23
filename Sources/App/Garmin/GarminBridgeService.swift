@@ -59,6 +59,7 @@ final class GarminBridgeService {
 
     func handle(_ message: GarminInboundMessage) {
         guard let config = currentConfigProvider?() else {
+            GarminDiagnostics.recordInbound(message, status: .failed, error: .missingConfig)
             send(.init(correlationId: message.correlationId, state: .failed, error: .missingConfig)) { _ in }
             return
         }
@@ -70,25 +71,36 @@ final class GarminBridgeService {
         config: GarminConfig,
         completion: @escaping (GarminCommandResult) -> Void
     ) {
+        GarminDiagnostics.recordInbound(message, status: .started)
+        let recordingCompletion: (GarminCommandResult) -> Void = { result in
+            GarminDiagnostics.recordInbound(
+                message,
+                status: result.state == .success ? .success : .failed,
+                error: result.error,
+                commandState: result.state
+            )
+            completion(result)
+        }
+
         guard message.version == GarminProtocolVersion.current else {
             let result = GarminCommandResult(
                 correlationId: message.correlationId,
                 state: .failed,
                 error: .unsupportedProtocol
             )
-            send(result, completion: completion)
+            send(result, completion: recordingCompletion)
             return
         }
 
         switch message.type {
         case .ping:
-            completion(GarminCommandResult(correlationId: message.correlationId, state: .success))
+            recordingCompletion(GarminCommandResult(correlationId: message.correlationId, state: .success))
         case .requestProfile:
-            sendProfile(config: config, correlationId: message.correlationId, completion: completion)
+            sendProfile(config: config, correlationId: message.correlationId, completion: recordingCompletion)
         case .requestStatus:
-            sendStatusSnapshot(config: config, correlationId: message.correlationId, completion: completion)
+            sendStatusSnapshot(config: config, correlationId: message.correlationId, completion: recordingCompletion)
         case .callAction:
-            handleCallAction(message, config: config, completion: completion)
+            handleCallAction(message, config: config, completion: recordingCompletion)
         }
     }
 
@@ -139,15 +151,21 @@ final class GarminBridgeService {
         completion: @escaping (GarminCommandResult) -> Void
     ) {
         guard let actionId = message.actionId, let item = config.action(for: actionId) else {
-            send(.init(correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
+            completeAction(.init(correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
             return
         }
+        GarminDiagnostics.record(.actionExecution, status: .started, metadata: [
+            "message_type": message.type.rawValue,
+            "correlation_id": message.correlationId ?? "",
+            "protocol_version": message.version,
+            "command_state": GarminCommandState.pending.rawValue,
+        ])
         guard GarminSupportedDomains.supportsAction(item) else {
-            send(.init(correlationId: message.correlationId, state: .failed, error: .unsupportedAction), completion: completion)
+            completeAction(.init(correlationId: message.correlationId, state: .failed, error: .unsupportedAction), completion: completion)
             return
         }
         guard let server = Current.servers.server(forServerIdentifier: item.serverId) else {
-            send(.init(correlationId: message.correlationId, state: .failed, error: .missingServer), completion: completion)
+            completeAction(.init(correlationId: message.correlationId, state: .failed, error: .missingServer), completion: completion)
             return
         }
 
@@ -159,8 +177,20 @@ final class GarminBridgeService {
             case let .failure(error):
                 result = .init(correlationId: message.correlationId, state: .failed, error: error)
             }
-            self?.send(result, completion: completion)
+            self?.completeAction(result, completion: completion)
         }
+    }
+
+    private func completeAction(
+        _ result: GarminCommandResult,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        GarminDiagnostics.record(.actionExecution, status: result.state == .success ? .success : .failed, metadata: [
+            "command_state": result.state.rawValue,
+            "error_code": result.error?.rawValue ?? "",
+            "correlation_id": result.correlationId ?? "",
+        ])
+        send(result, completion: completion)
     }
 
     private func completeTransportResult(
@@ -194,6 +224,22 @@ final class GarminBridgeService {
     }
 }
 
+private extension GarminDiagnostics {
+    static func recordInbound(
+        _ message: GarminInboundMessage,
+        status: GarminDiagnostics.Status,
+        error: GarminBridgeError? = nil,
+        commandState: GarminCommandState? = nil
+    ) {
+        record(.inboundMessage, status: status, metadata: [
+            "message_type": message.type.rawValue,
+            "protocol_version": message.version,
+            "correlation_id": message.correlationId ?? "",
+            "command_state": commandState?.rawValue ?? "",
+            "error_code": error?.rawValue ?? "",
+        ])
+    }
+}
 
 private enum GarminActionExecutor {
     static func execute(

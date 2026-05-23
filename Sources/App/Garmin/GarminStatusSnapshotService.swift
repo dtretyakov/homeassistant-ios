@@ -60,12 +60,26 @@ final class GarminStatusSnapshotService {
             } catch {
                 Current.Log.error("Failed to cache Garmin status snapshot: \(error)")
             }
+            GarminDiagnostics.record(.statusSnapshot, status: .success, metadata: [
+                "cache_status": "fresh",
+                "status_count": snapshot.statuses.count,
+            ])
             return .success(snapshot)
         } catch {
             if let cachedSnapshot = try? GarminStatusSnapshotCache.cachedSnapshot(statusIds: statusIds) {
+                GarminDiagnostics.record(.statusSnapshot, status: .success, metadata: [
+                    "cache_status": "fallback",
+                    "status_count": cachedSnapshot.statuses.count,
+                ])
                 return .success(cachedSnapshot)
             }
-            return .failure((error as? GarminBridgeError) ?? .homeAssistantUnavailable)
+            let bridgeError = (error as? GarminBridgeError) ?? .homeAssistantUnavailable
+            GarminDiagnostics.record(.statusSnapshot, status: .failed, metadata: [
+                "cache_status": "unavailable",
+                "error_code": bridgeError.rawValue,
+                "status_count": statusIds.count,
+            ])
+            return .failure(bridgeError)
         }
     }
 

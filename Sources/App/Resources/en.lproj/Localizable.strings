@@ -288,6 +288,7 @@
 "client_events.event_type.all" = "All";
 "client_events.event_type.background_operation" = "Background operation";
 "client_events.event_type.database" = "Database";
+"client_events.event_type.garmin" = "Garmin";
 "client_events.event_type.location_update" = "Location Update";
 "client_events.event_type.networkRequest" = "Network Request";
 "client_events.event_type.notification" = "Notification";

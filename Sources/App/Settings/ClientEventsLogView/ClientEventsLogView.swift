@@ -1,11 +1,16 @@
 import SFSafeSymbols
 import Shared
 import SwiftUI
+import UIKit
 
 struct ClientEventsLogView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var viewModel = ClientEventsLogViewModel()
+    @StateObject private var viewModel: ClientEventsLogViewModel
     @State private var showClearConfirmation = false
+
+    init(initialTypeFilter: ClientEvent.EventType? = nil) {
+        _viewModel = StateObject(wrappedValue: ClientEventsLogViewModel(initialTypeFilter: initialTypeFilter))
+    }
 
     var body: some View {
         List {
@@ -19,7 +24,14 @@ struct ClientEventsLogView: View {
         .navigationTitle(L10n.Settings.EventLog.title)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    UIPasteboard.general.string = viewModel.copyFilteredEventsText()
+                } label: {
+                    Text(verbatim: L10n.copyLabel)
+                }
+                .disabled(viewModel.visibleEvents.isEmpty)
+
                 Button {
                     showClearConfirmation = true
                 } label: {
@@ -47,39 +59,16 @@ struct ClientEventsLogView: View {
 
     @ViewBuilder
     private var eventsList: some View {
-        ForEach(filteredEvents, id: \.id) { event in
+        ForEach(viewModel.visibleEvents, id: \.id) { event in
             listItem(event)
         }
-        if filteredEvents.isEmpty {
+        if viewModel.visibleEvents.isEmpty {
             Text(verbatim: L10n.ClientEvents.noEvents)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .listRowBackground(Color.clear)
                 .font(.headline)
                 .foregroundColor(.secondary)
         }
-    }
-
-    private var filteredEvents: [ClientEvent] {
-        viewModel.events.filter({ event in
-            if viewModel.searchTerm.isEmpty, viewModel.typeFilter == nil {
-                return true
-            } else {
-                if viewModel.searchTerm.isEmpty {
-                    if let typeFilter = viewModel.typeFilter {
-                        return event.type == typeFilter
-                    } else {
-                        return true
-                    }
-                } else {
-                    let containsSearchTerm = event.text.lowercased().contains(viewModel.searchTerm.lowercased())
-                    if let typeFilter = viewModel.typeFilter {
-                        return event.type == typeFilter && containsSearchTerm
-                    } else {
-                        return containsSearchTerm
-                    }
-                }
-            }
-        })
     }
 
     private var typeFilter: some View {

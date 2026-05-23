@@ -134,13 +134,28 @@ final class GarminConfigurationViewModel: ObservableObject {
     func sync() {
         guard config.actionItems.count <= GarminConfig.maxActionItems else {
             showError(message: "Garmin supports up to \(GarminConfig.maxActionItems) favorite actions.")
+            GarminDiagnostics.record(.sync, status: .failed, metadata: [
+                "error_code": "too_many_actions",
+                "action_count": config.actionItems.count,
+                "status_count": config.statusItems.count,
+            ])
             return
         }
         guard config.statusItems.count <= GarminConfig.maxStatusItems else {
             showError(message: "Garmin supports up to \(GarminConfig.maxStatusItems) status items.")
+            GarminDiagnostics.record(.sync, status: .failed, metadata: [
+                "error_code": "too_many_statuses",
+                "action_count": config.actionItems.count,
+                "status_count": config.statusItems.count,
+            ])
             return
         }
         connectionState = bridgeService.connectionState
+        GarminDiagnostics.record(.sync, status: .started, metadata: [
+            "connection_state": GarminDiagnostics.connectionState(connectionState),
+            "action_count": config.actionItems.count,
+            "status_count": config.statusItems.count,
+        ])
         bridgeService.sync(config: config, itemInfo: { [weak self] item in
             self?.magicItemInfo(for: item)
         }) { [weak self] result in
@@ -149,10 +164,21 @@ final class GarminConfigurationViewModel: ObservableObject {
                 case .success:
                     self?.config.lastSyncTimestamp = Current.date().timeIntervalSince1970
                     self?.config.lastError = nil
+                    GarminDiagnostics.record(.sync, status: .success, metadata: [
+                        "connection_state": GarminDiagnostics.connectionState(self?.bridgeService.connectionState ?? .notConfigured),
+                        "action_count": self?.config.actionItems.count ?? 0,
+                        "status_count": self?.config.statusItems.count ?? 0,
+                    ])
                     _ = self?.save()
                 case let .failure(error):
                     self?.config.lastError = error.rawValue
                     self?.showError(message: error.rawValue)
+                    GarminDiagnostics.record(.sync, status: .failed, metadata: [
+                        "connection_state": GarminDiagnostics.connectionState(self?.bridgeService.connectionState ?? .notConfigured),
+                        "error_code": error.rawValue,
+                        "action_count": self?.config.actionItems.count ?? 0,
+                        "status_count": self?.config.statusItems.count ?? 0,
+                    ])
                     _ = self?.save()
                 }
             }
@@ -165,6 +191,11 @@ final class GarminConfigurationViewModel: ObservableObject {
         config.deviceIdentifier = nil
         config.appIdentifier = nil
         config.lastError = nil
+        GarminDiagnostics.record(.disconnect, status: .success, metadata: [
+            "connection_state": GarminDiagnostics.connectionState(connectionState),
+            "action_count": config.actionItems.count,
+            "status_count": config.statusItems.count,
+        ])
         save()
     }
 
@@ -196,8 +227,16 @@ final class GarminConfigurationViewModel: ObservableObject {
             applyPrefilledItemIfNeeded()
             loadDiscovery()
             connectionState = bridgeService.connectionState
+            GarminDiagnostics.record(.configLoad, status: .success, metadata: [
+                "connection_state": GarminDiagnostics.connectionState(connectionState),
+                "action_count": self.config.actionItems.count,
+                "status_count": self.config.statusItems.count,
+            ])
         } catch {
             Current.Log.error("Failed to load Garmin config, error: \(error.localizedDescription)")
+            GarminDiagnostics.record(.configLoad, status: .failed, metadata: [
+                "error_code": "database",
+            ])
             showError(message: error.localizedDescription)
         }
     }
@@ -215,8 +254,15 @@ final class GarminConfigurationViewModel: ObservableObject {
         }
         do {
             discoveryResult = try entityDiscoveryService.discover(serverId: serverId)
+            GarminDiagnostics.record(.discovery, status: .success, metadata: [
+                "action_count": discoveryResult.recommendedActions.count,
+                "status_count": discoveryResult.recommendedStatuses.count,
+            ])
         } catch {
             Current.Log.error("Failed to load Garmin entity discovery, error: \(error.localizedDescription)")
+            GarminDiagnostics.record(.discovery, status: .failed, metadata: [
+                "error_code": "home_assistant_unavailable",
+            ])
             discoveryResult = .empty
         }
     }

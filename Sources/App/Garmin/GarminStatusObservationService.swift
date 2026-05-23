@@ -70,6 +70,7 @@ final class GarminStatusObservationService {
         }
 
         isStarted = true
+        GarminDiagnostics.record(.statusObservation, status: .started)
         Current.servers.add(observer: self)
         notificationCenter.addObserver(
             self,
@@ -91,6 +92,7 @@ final class GarminStatusObservationService {
         guard isStarted else { return }
 
         isStarted = false
+        GarminDiagnostics.record(.statusObservation, status: .stopped)
         notificationCenter.removeObserver(self)
         Current.servers.remove(observer: self)
         configObservation?.cancel()
@@ -137,6 +139,10 @@ final class GarminStatusObservationService {
         let signature = ObservationSignature(config: config)
         guard !signature.statusIds.isEmpty else {
             cancelActiveObservation()
+            GarminDiagnostics.record(.statusObservation, status: .skipped, metadata: [
+                "subscription_state": "no_status_items",
+                "status_count": 0,
+            ])
             return
         }
 
@@ -157,13 +163,28 @@ final class GarminStatusObservationService {
             },
             { [weak self] error in
                 Current.Log.error("Garmin status subscription failed with error: \(error)")
+                GarminDiagnostics.record(.statusObservation, status: .failed, metadata: [
+                    "subscription_state": "failed",
+                    "error_code": error.rawValue,
+                    "status_count": signature.statusIds.count,
+                ])
                 self?.scheduleSnapshotRefresh(config: config, signature: signature)
             }
         )
 
         if subscription == nil {
             Current.Log.error("Garmin status subscription unavailable")
+            GarminDiagnostics.record(.statusObservation, status: .failed, metadata: [
+                "subscription_state": "unavailable",
+                "error_code": GarminBridgeError.homeAssistantUnavailable.rawValue,
+                "status_count": signature.statusIds.count,
+            ])
             scheduleSnapshotRefresh(config: config, signature: signature)
+        } else {
+            GarminDiagnostics.record(.statusObservation, status: .success, metadata: [
+                "subscription_state": "started",
+                "status_count": signature.statusIds.count,
+            ])
         }
     }
 
@@ -226,17 +247,32 @@ final class GarminStatusObservationService {
 
     private func enqueue(_ snapshot: GarminStatusSnapshot) {
         guard client.state.isReady else {
+            GarminDiagnostics.record(.statusSend, status: .skipped, metadata: [
+                "connection_state": GarminDiagnostics.connectionState(client.state),
+                "send_state": "not_ready",
+                "status_count": snapshot.statuses.count,
+            ])
             return
         }
 
         let signature = SnapshotSignature(snapshot: snapshot)
 
         if signature == lastAttemptedSnapshotSignature {
+            GarminDiagnostics.record(.statusSend, status: .skipped, metadata: [
+                "connection_state": GarminDiagnostics.connectionState(client.state),
+                "send_state": "deduped",
+                "status_count": snapshot.statuses.count,
+            ])
             return
         }
 
         if isSending {
             if signature == inFlightSnapshotSignature {
+                GarminDiagnostics.record(.statusSend, status: .skipped, metadata: [
+                    "connection_state": GarminDiagnostics.connectionState(client.state),
+                    "send_state": "in_flight_duplicate",
+                    "status_count": snapshot.statuses.count,
+                ])
                 return
             }
             pendingSnapshot = snapshot
@@ -257,6 +293,18 @@ final class GarminStatusObservationService {
 
                 if case let .failure(error) = result {
                     Current.Log.error("Failed to send Garmin status snapshot: \(error)")
+                    GarminDiagnostics.record(.statusSend, status: .failed, metadata: [
+                        "connection_state": GarminDiagnostics.connectionState(self.client.state),
+                        "send_state": "completed",
+                        "error_code": error.rawValue,
+                        "status_count": snapshot.statuses.count,
+                    ])
+                } else {
+                    GarminDiagnostics.record(.statusSend, status: .success, metadata: [
+                        "connection_state": GarminDiagnostics.connectionState(self.client.state),
+                        "send_state": "completed",
+                        "status_count": snapshot.statuses.count,
+                    ])
                 }
 
                 self.lastAttemptedSnapshotSignature = signature

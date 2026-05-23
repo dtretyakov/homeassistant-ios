@@ -203,6 +203,9 @@ struct GarminConfigurationView: View {
 
     private var diagnosticsSection: some View {
         Section("Diagnostics") {
+            NavigationLink("Diagnostics log") {
+                ClientEventsLogView(initialTypeFilter: .garmin)
+            }
             if let lastSyncTimestamp = viewModel.config.lastSyncTimestamp {
                 HStack {
                     Text("Last sync")
