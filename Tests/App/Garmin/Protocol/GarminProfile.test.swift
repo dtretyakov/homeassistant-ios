@@ -1,7 +1,44 @@
+import Foundation
+@testable import HomeAssistant
 @testable import Shared
 import Testing
 
 struct GarminProfileTests {
+    @Test func inboundPingDictionaryDecodes() throws {
+        let message = try GarminPayloadCodec.decodeInboundDictionary([
+            "version": 1,
+            "type": "ping",
+            "correlation_id": "h123",
+        ])
+
+        #expect(message == GarminInboundMessage(type: .ping, correlationId: "h123"))
+    }
+
+    @Test func connectionStatusEncodingUsesStableSnakeCaseKeys() throws {
+        let message = GarminOutboundMessage(
+            type: .connectionStatus,
+            connectionStatus: .init(correlationId: "h123", state: .success)
+        )
+        let encoded = try String(decoding: JSONEncoder().encode(message), as: UTF8.self)
+        let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(message)
+
+        #expect(encoded.contains("\"type\":\"connection_status\""))
+        #expect(encoded.contains("\"connection_status\""))
+        #expect(encoded.contains("\"correlation_id\""))
+        #expect(encoded.contains("\"max_payload_bytes\":4096"))
+        #expect((dictionary["connection_status"] as? [String: Any])?["correlation_id"] as? String == "h123")
+    }
+
+    @Test func payloadByteLimitCanRejectLargeOutboundMessage() throws {
+        let oversizedLabel = String(repeating: "A", count: GarminPayloadLimits.outboundMessageBytes)
+        let profile = GarminProfile(actions: [
+            .init(id: "garmin_action_1", label: oversizedLabel),
+        ])
+        let message = GarminOutboundMessage(type: .profileSync, profile: profile)
+
+        #expect(try GarminPayloadCodec.encodedByteCount(message) > GarminPayloadLimits.outboundMessageBytes)
+    }
+
     @Test func profileDoesNotExposeHomeAssistantInternals() throws {
         let item = MagicItem(
             id: "light.secret_room",

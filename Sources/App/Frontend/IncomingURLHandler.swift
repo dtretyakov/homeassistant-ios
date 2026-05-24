@@ -4,6 +4,7 @@ import PromiseKit
 import SafariServices
 import Shared
 import SwiftUI
+import UIKit
 
 class IncomingURLHandler {
     private(set) weak var windowController: WebViewWindowController!
@@ -30,6 +31,12 @@ class IncomingURLHandler {
     @discardableResult
     func handle(url: URL) -> Bool {
         Current.Log.verbose("Received URL: \(url)")
+        if GarminFeature.isEnabled,
+           GarminFeature.canHandleConnectIQURL(url),
+           (UIApplication.shared.delegate as? AppDelegate)?.handleGarminConnectIQURL(url) == true {
+            return true
+        }
+
         var serviceData: [String: String] = [:]
         if let queryItems = url.queryItems {
             serviceData = queryItems

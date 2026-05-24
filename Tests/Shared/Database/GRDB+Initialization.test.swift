@@ -44,8 +44,6 @@ struct GRDBInitializationTests {
             GRDBDatabaseTable.watchConfig.rawValue,
             GRDBDatabaseTable.carPlayConfig.rawValue,
             GRDBDatabaseTable.appIconShortcutConfig.rawValue,
-            GRDBDatabaseTable.garminConfig.rawValue,
-            GRDBDatabaseTable.garminStatusSnapshotCache.rawValue,
             GRDBDatabaseTable.assistPipelines.rawValue,
             GRDBDatabaseTable.serverInfoMirror.rawValue,
             GRDBDatabaseTable.appEntityRegistryListForDisplay.rawValue,

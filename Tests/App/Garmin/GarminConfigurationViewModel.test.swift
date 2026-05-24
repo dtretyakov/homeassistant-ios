@@ -1,3 +1,4 @@
+import Combine
 import GRDB
 @testable import HomeAssistant
 @testable import Shared
@@ -12,7 +13,8 @@ struct GarminConfigurationViewModelTests {
             viewModel.addAction(item)
 
             #expect(viewModel.config.actionItems == [item])
-            #expect(try GarminConfig.config()?.actionItems == [item])
+            let persistedConfig = try GarminConfig.config()
+            #expect(persistedConfig?.actionItems == [item])
         }
     }
 
@@ -143,7 +145,7 @@ struct GarminConfigurationViewModelTests {
     }
 
     @Test func syncRefusesOversizedLegacyConfig() throws {
-        try withViewModel { viewModel, client in
+        try withViewModel { viewModel, controller in
             viewModel.config.actionItems = (0...GarminConfig.maxActionItems).map { index in
                 MagicItem(
                     id: "script.item_\(index)",
@@ -155,7 +157,17 @@ struct GarminConfigurationViewModelTests {
             viewModel.sync()
 
             #expect(viewModel.config.actionItems.count == GarminConfig.maxActionItems + 1)
-            #expect(client.sentProfiles.isEmpty)
+            #expect(controller.sentProfiles.isEmpty)
+        }
+    }
+
+    @Test func checkConnectionRequestsDeviceSelectionWithoutProfileSync() throws {
+        try withViewModel { viewModel, controller in
+            viewModel.checkConnection()
+
+            #expect(controller.didRequestConnectionCheck)
+            #expect(viewModel.connectionState == .selectingDevice)
+            #expect(controller.sentProfiles.isEmpty)
         }
     }
 
@@ -166,7 +178,8 @@ struct GarminConfigurationViewModelTests {
             viewModel.addStatus(item)
 
             #expect(viewModel.config.statusItems == [item])
-            #expect(try GarminConfig.config()?.statusItems == [item])
+            let persistedConfig = try GarminConfig.config()
+            #expect(persistedConfig?.statusItems == [item])
         }
     }
 
@@ -243,7 +256,7 @@ struct GarminConfigurationViewModelTests {
     }
 
     @Test func syncRefusesOversizedLegacyStatusConfig() throws {
-        try withViewModel { viewModel, client in
+        try withViewModel { viewModel, controller in
             viewModel.config.statusItems = (0...GarminConfig.maxStatusItems).map { index in
                 MagicItem(
                     id: "sensor.item_\(index)",
@@ -255,7 +268,7 @@ struct GarminConfigurationViewModelTests {
             viewModel.sync()
 
             #expect(viewModel.config.statusItems.count == GarminConfig.maxStatusItems + 1)
-            #expect(client.sentProfiles.isEmpty)
+            #expect(controller.sentProfiles.isEmpty)
         }
     }
 
@@ -266,17 +279,53 @@ struct GarminConfigurationViewModelTests {
     }
 
     private func withViewModel(
-        _ body: (GarminConfigurationViewModel, FakeGarminConnectIQClient) throws -> Void
+        _ body: (GarminConfigurationViewModel, FakeGarminIntegrationController) throws -> Void
     ) throws {
         let database = try DatabaseQueue(path: ":memory:")
-        try GarminConfigTable().createIfNeeded(database: database)
+        try GarminDatabaseSchema.createIfNeeded(database: database)
         let previousDatabase = Current.database
         Current.database = { database }
         defer { Current.database = previousDatabase }
 
-        let client = FakeGarminConnectIQClient()
-        let bridgeService = GarminBridgeService(client: client)
-        let viewModel = GarminConfigurationViewModel(bridgeService: bridgeService)
-        try body(viewModel, client)
+        let controller = FakeGarminIntegrationController()
+        let viewModel = GarminConfigurationViewModel(integrationController: controller)
+        try body(viewModel, controller)
+    }
+}
+
+private final class FakeGarminIntegrationController: GarminIntegrationControlling {
+    private let connectionStateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
+    var connectionState: GarminConnectionState { connectionStateSubject.value }
+    var connectionStatePublisher: AnyPublisher<GarminConnectionState, Never> {
+        connectionStateSubject.eraseToAnyPublisher()
+    }
+
+    var didRequestConnectionCheck = false
+    var sentProfiles: [GarminProfile] = []
+
+    func setup() {}
+
+    func handleConnectIQURL(_ url: URL) -> Bool {
+        false
+    }
+
+    func requestConnectionCheck(force: Bool) {
+        didRequestConnectionCheck = true
+        connectionStateSubject.send(.selectingDevice)
+    }
+
+    func sync(
+        config: GarminConfig,
+        itemInfo: @escaping (MagicItem) -> MagicItem.Info?,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        let profile = GarminProfile(config: config, itemInfo: itemInfo)
+        sentProfiles.append(profile)
+        completion(.success(()))
+    }
+
+    func disconnect(config: GarminConfig, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
+        connectionStateSubject.send(.notConfigured)
+        completion(.success(()))
     }
 }

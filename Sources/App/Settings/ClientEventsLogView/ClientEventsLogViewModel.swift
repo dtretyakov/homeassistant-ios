@@ -64,7 +64,7 @@ final class ClientEventsLogViewModel: ObservableObject {
             if let dictionary = pair.value as? [String: Any] {
                 result[pair.key] = sanitizedCopyPayload(dictionary)
             } else if let array = pair.value as? [Any] {
-                result[pair.key] = array.map { value in
+                result[pair.key] = array.map { value -> Any in
                     if let dictionary = value as? [String: Any] {
                         return sanitizedCopyPayload(dictionary)
                     }

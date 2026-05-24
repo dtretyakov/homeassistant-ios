@@ -3,12 +3,12 @@ import Foundation
 import PromiseKit
 import Shared
 
-final class GarminBridgeService {
-    typealias ActionExecutor = (MagicItem, Server, @escaping (Swift.Result<Void, GarminBridgeError>) -> Void) -> Void
+final class GarminIntegrationService {
+    typealias ActionExecutor = (MagicItem, Server, @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) -> Void
     typealias ItemInfoProvider = (MagicItem) -> MagicItem.Info?
     typealias StatusSnapshotProvider = (
         GarminConfig,
-        @escaping (Swift.Result<GarminStatusSnapshot, GarminBridgeError>) -> Void
+        @escaping (Swift.Result<GarminStatusSnapshot, GarminIntegrationError>) -> Void
     ) -> Void
 
     private let client: GarminConnectIQClient
@@ -20,7 +20,7 @@ final class GarminBridgeService {
     var connectionState: GarminConnectionState { client.state }
 
     init(
-        client: GarminConnectIQClient = GarminConnectIQSDKClient(),
+        client: GarminConnectIQClient,
         actionExecutor: @escaping ActionExecutor = GarminActionExecutor.execute
     ) {
         self.client = client
@@ -43,7 +43,7 @@ final class GarminBridgeService {
     func sync(
         config: GarminConfig,
         itemInfo: (MagicItem) -> MagicItem.Info?,
-        completion: @escaping (Swift.Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         guard client.state.isReady else {
             completion(.failure(error(for: client.state)))
@@ -52,12 +52,21 @@ final class GarminBridgeService {
         client.sendProfile(GarminProfile(config: config, itemInfo: itemInfo), completion: completion)
     }
 
-    func disconnect(config: GarminConfig, completion: @escaping (Swift.Result<Void, GarminBridgeError>) -> Void) {
+    func requestDeviceSelection(force: Bool) {
+        client.requestDeviceSelection(force: force)
+    }
+
+    func disconnect(config: GarminConfig, completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) {
         client.disconnect()
         completion(.success(()))
     }
 
     func handle(_ message: GarminInboundMessage) {
+        if message.type == .ping {
+            handlePing(message) { _ in }
+            return
+        }
+
         guard let config = currentConfigProvider?() else {
             GarminDiagnostics.recordInbound(message, status: .failed, error: .missingConfig)
             send(.init(correlationId: message.correlationId, state: .failed, error: .missingConfig)) { _ in }
@@ -88,19 +97,48 @@ final class GarminBridgeService {
                 state: .failed,
                 error: .unsupportedProtocol
             )
-            send(result, completion: recordingCompletion)
+            if message.type == .ping {
+                sendConnectionStatus(
+                    .init(correlationId: message.correlationId, state: .failed, error: .unsupportedProtocol),
+                    completion: recordingCompletion
+                )
+            } else {
+                send(result, completion: recordingCompletion)
+            }
             return
         }
 
         switch message.type {
         case .ping:
-            recordingCompletion(GarminCommandResult(correlationId: message.correlationId, state: .success))
+            sendConnectionStatus(
+                .init(correlationId: message.correlationId, state: .success),
+                completion: recordingCompletion
+            )
         case .requestProfile:
             sendProfile(config: config, correlationId: message.correlationId, completion: recordingCompletion)
         case .requestStatus:
             sendStatusSnapshot(config: config, correlationId: message.correlationId, completion: recordingCompletion)
         case .callAction:
             handleCallAction(message, config: config, completion: recordingCompletion)
+        }
+    }
+
+    private func handlePing(_ message: GarminInboundMessage, completion: @escaping (GarminCommandResult) -> Void) {
+        GarminDiagnostics.recordInbound(message, status: .started)
+        let status: GarminConnectionStatus
+        if message.version == GarminProtocolVersion.current {
+            status = .init(correlationId: message.correlationId, state: .success)
+        } else {
+            status = .init(correlationId: message.correlationId, state: .failed, error: .unsupportedProtocol)
+        }
+        sendConnectionStatus(status) { result in
+            GarminDiagnostics.recordInbound(
+                message,
+                status: result.state == .success ? .success : .failed,
+                error: result.error,
+                commandState: result.state
+            )
+            completion(result)
         }
     }
 
@@ -194,7 +232,7 @@ final class GarminBridgeService {
     }
 
     private func completeTransportResult(
-        _ result: Swift.Result<Void, GarminBridgeError>,
+        _ result: Swift.Result<Void, GarminIntegrationError>,
         correlationId: String?,
         completion: @escaping (GarminCommandResult) -> Void
     ) {
@@ -212,9 +250,23 @@ final class GarminBridgeService {
         }
     }
 
-    private func error(for state: GarminConnectionState) -> GarminBridgeError {
+    private func sendConnectionStatus(
+        _ status: GarminConnectionStatus,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        client.sendConnectionStatus(status) { sendResult in
+            switch sendResult {
+            case .success:
+                completion(.init(correlationId: status.correlationId, state: status.state, error: status.error))
+            case let .failure(error):
+                completion(.init(correlationId: status.correlationId, state: .failed, error: error))
+            }
+        }
+    }
+
+    private func error(for state: GarminConnectionState) -> GarminIntegrationError {
         switch state {
-        case .notConfigured, .appUnavailable, .deviceUnavailable:
+        case .notConfigured, .selectingDevice, .waitingForWatch, .appUnavailable, .deviceUnavailable:
             return .watchUnavailable
         case .sdkUnavailable:
             return .sdkUnavailable
@@ -228,7 +280,7 @@ private extension GarminDiagnostics {
     static func recordInbound(
         _ message: GarminInboundMessage,
         status: GarminDiagnostics.Status,
-        error: GarminBridgeError? = nil,
+        error: GarminIntegrationError? = nil,
         commandState: GarminCommandState? = nil
     ) {
         record(.inboundMessage, status: status, metadata: [
@@ -245,7 +297,7 @@ private enum GarminActionExecutor {
     static func execute(
         item: MagicItem,
         server: Server,
-        completion: @escaping (Swift.Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         guard GarminSupportedDomains.supportsAction(item) else {
             completion(.failure(.unsupportedAction))
@@ -293,7 +345,7 @@ private enum GarminActionExecutor {
         }
     }
 
-    private static func map(error: Error) -> GarminBridgeError {
+    private static func map(error: Error) -> GarminIntegrationError {
         if let authenticationError = error as? AuthenticationAPI.AuthenticationError {
             return map(authenticationError: authenticationError)
         }
@@ -307,7 +359,7 @@ private enum GarminActionExecutor {
         return .commandFailed
     }
 
-    private static func map(authenticationError: AuthenticationAPI.AuthenticationError) -> GarminBridgeError {
+    private static func map(authenticationError: AuthenticationAPI.AuthenticationError) -> GarminIntegrationError {
         switch authenticationError {
         case let .serverError(statusCode, _, _):
             if (400 ... 403).contains(statusCode) {

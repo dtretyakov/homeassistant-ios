@@ -30,6 +30,14 @@
 				<string>${ENV_URL_HANDLER}</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Garmin Connect IQ</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>homeassistant-garmin-ciq</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>

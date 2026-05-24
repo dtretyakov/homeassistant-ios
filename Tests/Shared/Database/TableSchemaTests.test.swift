@@ -95,28 +95,6 @@ struct TableSchemaTests {
         )
     }
 
-    @Test("GarminConfigTable schema validation")
-    func garminConfigTableSchema() throws {
-        let table = GarminConfigTable()
-        let expectedColumns = DatabaseTables.GarminConfig.allCases.map(\.rawValue)
-        try verifyTableSchema(
-            table: table,
-            expectedTableName: GRDBDatabaseTable.garminConfig.rawValue,
-            expectedColumns: expectedColumns
-        )
-    }
-
-    @Test("GarminStatusSnapshotCacheTable schema validation")
-    func garminStatusSnapshotCacheTableSchema() throws {
-        let table = GarminStatusSnapshotCacheTable()
-        let expectedColumns = DatabaseTables.GarminStatusSnapshotCache.allCases.map(\.rawValue)
-        try verifyTableSchema(
-            table: table,
-            expectedTableName: GRDBDatabaseTable.garminStatusSnapshotCache.rawValue,
-            expectedColumns: expectedColumns
-        )
-    }
-
     @Test("ServerInfoMirrorTable schema validation")
     func serverInfoMirrorTableSchema() throws {
         let table = ServerInfoMirrorTable()

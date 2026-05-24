@@ -37,6 +37,13 @@ extension AppEnvironment {
     var notificationManager: NotificationManager {
         UIApplication.shared.typedDelegate.notificationManager
     }
+
+    var garminIntegrationController: GarminIntegrationControlling {
+        guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else {
+            return DisabledGarminIntegrationController()
+        }
+        return appDelegate.garminIntegrationController
+    }
 }
 
 @main
@@ -59,8 +66,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     private var shouldRefreshTitleSubscription = false
 
     private var watchCommunicatorService: WatchCommunicatorService?
-    private var garminBridgeService: GarminBridgeService?
-    private var garminStatusObservationService: GarminStatusObservationService?
+    fileprivate var garminIntegrationController: GarminIntegrationControlling = DisabledGarminIntegrationController()
 
     func application(
         _ application: UIApplication,
@@ -116,7 +122,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         UIApplication.shared.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalMinimum)
 
         setupWatchCommunicator()
-        setupGarminBridge()
+        setupGarminIntegration()
         setupUIApplicationShortcutItems()
         migrateIfNeeded()
 
@@ -380,37 +386,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         watchCommunicatorService?.setup()
     }
 
-    private func setupGarminBridge() {
+    private func setupGarminIntegration() {
         #if os(iOS) && !targetEnvironment(macCatalyst)
         guard GarminFeature.isEnabled, UIDevice.current.userInterfaceIdiom == .phone else { return }
-        let magicItemProvider = Current.magicItemProvider()
-        magicItemProvider.loadInformation { _ in }
-        let client = GarminConnectIQSDKClient()
-        let service = GarminBridgeService(client: client)
-        let statusSnapshotService = GarminStatusSnapshotService()
-        let statusSnapshotProvider: GarminStatusObservationService.SnapshotProvider = { config, completion in
-            Task {
-                let result = await statusSnapshotService.snapshotWithCacheFallback(
-                    config: config,
-                    itemInfo: { magicItemProvider.getInfo(for: $0) }
-                )
-                completion(result)
-            }
-        }
-        service.setup(
-            configProvider: { try? Current.garminConfig() },
-            itemInfoProvider: { magicItemProvider.getInfo(for: $0) },
-            statusSnapshotProvider: statusSnapshotProvider
-        )
-        let observationService = GarminStatusObservationService(
-            client: client,
-            configProvider: { try? Current.garminConfig() },
-            snapshotProvider: statusSnapshotProvider
-        )
-        observationService.start()
-        garminBridgeService = service
-        garminStatusObservationService = observationService
+        let controller = GarminIntegrationController()
+        controller.setup()
+        garminIntegrationController = controller
         #endif
+    }
+
+    func handleGarminConnectIQURL(_ url: URL) -> Bool {
+        garminIntegrationController.handleConnectIQURL(url)
     }
 
     func setupLocalization() {

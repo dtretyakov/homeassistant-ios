@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Shared
 
 public struct GarminStatusSnapshotCache: Codable, FetchableRecord, PersistableRecord, Equatable {
     public static var cacheId: String { "garmin-status-snapshot-cache" }
@@ -19,7 +20,8 @@ public struct GarminStatusSnapshotCache: Codable, FetchableRecord, PersistableRe
     }
 
     public static func cachedSnapshot(statusIds: [String]) throws -> GarminStatusSnapshot? {
-        try Current.database().read { db in
+        try GarminDatabaseSchema.createIfNeeded()
+        return try Current.database().read { db -> GarminStatusSnapshot? in
             let cache = try GarminStatusSnapshotCache.fetchOne(db, key: cacheId)
             guard let cache,
                   cache.statusIds == statusIds,
@@ -31,14 +33,16 @@ public struct GarminStatusSnapshotCache: Codable, FetchableRecord, PersistableRe
     }
 
     public static func save(_ snapshot: GarminStatusSnapshot, statusIds: [String]) throws {
+        try GarminDatabaseSchema.createIfNeeded()
         try Current.database().write { db in
             try GarminStatusSnapshotCache(statusIds: statusIds, snapshot: snapshot).save(db)
         }
     }
 
     public static func clear() throws {
+        try GarminDatabaseSchema.createIfNeeded()
         try Current.database().write { db in
-            try GarminStatusSnapshotCache.deleteAll(db)
+            _ = try GarminStatusSnapshotCache.deleteAll(db)
         }
     }
 }

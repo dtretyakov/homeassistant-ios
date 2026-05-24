@@ -13,25 +13,32 @@ final class GarminConfigurationViewModel: ObservableObject {
     @Published private(set) var discoveryResult = GarminEntityDiscoveryResult.empty
 
     private let magicItemProvider = Current.magicItemProvider()
-    private let bridgeService: GarminBridgeService
+    private let integrationController: GarminIntegrationControlling
     private let entityDiscoveryService: GarminEntityDiscoveryService
     private let prefilledItem: MagicItem?
     private var didApplyPrefilledItem = false
+    private var cancellables = Set<AnyCancellable>()
 
     init(
         prefilledItem: MagicItem? = nil,
-        bridgeService: GarminBridgeService = GarminBridgeService(),
+        integrationController: GarminIntegrationControlling = Current.garminIntegrationController,
         entityDiscoveryService: GarminEntityDiscoveryService = GarminEntityDiscoveryService()
     ) {
         self.prefilledItem = prefilledItem
-        self.bridgeService = bridgeService
+        self.integrationController = integrationController
         self.entityDiscoveryService = entityDiscoveryService
-        let magicItemProvider = self.magicItemProvider
-        bridgeService.setup(
-            configProvider: { try? Current.garminConfig() },
-            itemInfoProvider: { magicItemProvider.getInfo(for: $0) }
-        )
-        connectionState = bridgeService.connectionState
+        integrationController.connectionStatePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.connectionState = state
+            }
+            .store(in: &cancellables)
+        do {
+            try GarminDatabaseSchema.createIfNeeded()
+        } catch {
+            Current.Log.error("Failed to initialize Garmin database schema, error: \(error.localizedDescription)")
+        }
+        connectionState = integrationController.connectionState
     }
 
     @MainActor
@@ -150,13 +157,13 @@ final class GarminConfigurationViewModel: ObservableObject {
             ])
             return
         }
-        connectionState = bridgeService.connectionState
+        connectionState = integrationController.connectionState
         GarminDiagnostics.record(.sync, status: .started, metadata: [
             "connection_state": GarminDiagnostics.connectionState(connectionState),
             "action_count": config.actionItems.count,
             "status_count": config.statusItems.count,
         ])
-        bridgeService.sync(config: config, itemInfo: { [weak self] item in
+        integrationController.sync(config: config, itemInfo: { [weak self] item in
             self?.magicItemInfo(for: item)
         }) { [weak self] result in
             DispatchQueue.main.async {
@@ -165,7 +172,7 @@ final class GarminConfigurationViewModel: ObservableObject {
                     self?.config.lastSyncTimestamp = Current.date().timeIntervalSince1970
                     self?.config.lastError = nil
                     GarminDiagnostics.record(.sync, status: .success, metadata: [
-                        "connection_state": GarminDiagnostics.connectionState(self?.bridgeService.connectionState ?? .notConfigured),
+                        "connection_state": GarminDiagnostics.connectionState(self?.integrationController.connectionState ?? .notConfigured),
                         "action_count": self?.config.actionItems.count ?? 0,
                         "status_count": self?.config.statusItems.count ?? 0,
                     ])
@@ -174,7 +181,7 @@ final class GarminConfigurationViewModel: ObservableObject {
                     self?.config.lastError = error.rawValue
                     self?.showError(message: error.rawValue)
                     GarminDiagnostics.record(.sync, status: .failed, metadata: [
-                        "connection_state": GarminDiagnostics.connectionState(self?.bridgeService.connectionState ?? .notConfigured),
+                        "connection_state": GarminDiagnostics.connectionState(self?.integrationController.connectionState ?? .notConfigured),
                         "error_code": error.rawValue,
                         "action_count": self?.config.actionItems.count ?? 0,
                         "status_count": self?.config.statusItems.count ?? 0,
@@ -185,9 +192,14 @@ final class GarminConfigurationViewModel: ObservableObject {
         }
     }
 
+    func checkConnection() {
+        integrationController.requestConnectionCheck(force: true)
+        connectionState = integrationController.connectionState
+    }
+
     func disconnect() {
-        bridgeService.disconnect(config: config) { _ in }
-        connectionState = bridgeService.connectionState
+        integrationController.disconnect(config: config) { _ in }
+        connectionState = integrationController.connectionState
         config.deviceIdentifier = nil
         config.appIdentifier = nil
         config.lastError = nil
@@ -226,7 +238,7 @@ final class GarminConfigurationViewModel: ObservableObject {
             }
             applyPrefilledItemIfNeeded()
             loadDiscovery()
-            connectionState = bridgeService.connectionState
+            connectionState = integrationController.connectionState
             GarminDiagnostics.record(.configLoad, status: .success, metadata: [
                 "connection_state": GarminDiagnostics.connectionState(connectionState),
                 "action_count": self.config.actionItems.count,

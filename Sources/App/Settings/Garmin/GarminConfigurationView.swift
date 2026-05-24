@@ -101,6 +101,9 @@ struct GarminConfigurationView: View {
                 Text(connectionStateText)
                     .foregroundStyle(.secondary)
             }
+            Button("Check connection") {
+                viewModel.checkConnection()
+            }
             Button("Sync to Garmin") {
                 viewModel.sync()
             }
@@ -269,7 +272,11 @@ struct GarminConfigurationView: View {
     private var connectionStateText: String {
         switch viewModel.connectionState {
         case .notConfigured:
-            return "Not configured"
+            return "Not paired"
+        case .selectingDevice:
+            return "Selecting watch"
+        case .waitingForWatch:
+            return "Waiting for watch"
         case .sdkUnavailable:
             return "SDK unavailable"
         case .appUnavailable:

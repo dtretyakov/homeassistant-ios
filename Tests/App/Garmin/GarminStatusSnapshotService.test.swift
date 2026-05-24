@@ -150,7 +150,7 @@ struct GarminStatusSnapshotServiceTests {
                 statusIds: statusIds
             )
             let service = GarminStatusSnapshotService(
-                stateProvider: { _, _ in throw GarminBridgeError.homeAssistantUnavailable },
+                stateProvider: { _, _ in throw GarminIntegrationError.homeAssistantUnavailable },
                 dateProvider: { Date(timeIntervalSince1970: 1_710_000_004) }
             )
 
@@ -214,7 +214,7 @@ struct GarminStatusSnapshotServiceTests {
         try await withServer(identifier: "server-1") {
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
             let service = GarminStatusSnapshotService(
-                stateProvider: { _, _ in throw GarminBridgeError.homeAssistantUnavailable }
+                stateProvider: { _, _ in throw GarminIntegrationError.homeAssistantUnavailable }
             )
 
             let result = await service.snapshotWithCacheFallback(
@@ -235,7 +235,7 @@ struct GarminStatusSnapshotServiceTests {
         try await withServer(identifier: "server-1") {
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
             let service = GarminStatusSnapshotService(
-                stateProvider: { _, _ in throw GarminBridgeError.homeAssistantUnavailable }
+                stateProvider: { _, _ in throw GarminIntegrationError.homeAssistantUnavailable }
             )
 
             let result = await service.snapshotWithCacheFallback(

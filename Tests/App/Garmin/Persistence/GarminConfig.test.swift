@@ -1,11 +1,22 @@
 import GRDB
+@testable import HomeAssistant
 @testable import Shared
 import Testing
 
 struct GarminConfigTests {
+    @Test func garminTablesExposeExpectedSchema() throws {
+        #expect(GarminConfigTable().tableName == "garminConfig")
+        #expect(GarminConfigTable().definedColumns == GarminConfigTable.Column.allCases.map(\.rawValue))
+        #expect(GarminStatusSnapshotCacheTable().tableName == "garminStatusSnapshotCache")
+        #expect(
+            GarminStatusSnapshotCacheTable().definedColumns ==
+                GarminStatusSnapshotCacheTable.Column.allCases.map(\.rawValue)
+        )
+    }
+
     @Test func persistsAndLoadsFromGRDB() throws {
         let database = try DatabaseQueue(path: ":memory:")
-        try GarminConfigTable().createIfNeeded(database: database)
+        try GarminDatabaseSchema.createIfNeeded(database: database)
         let previousDatabase = Current.database
         Current.database = { database }
         defer { Current.database = previousDatabase }

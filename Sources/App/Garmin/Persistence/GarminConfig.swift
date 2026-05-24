@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Shared
 
 public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatable {
     public static var garminConfigId: String { "garmin-config" }
@@ -36,7 +37,8 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
     }
 
     public static func config() throws -> GarminConfig? {
-        try Current.database().read { db in
+        try GarminDatabaseSchema.createIfNeeded()
+        return try Current.database().read { db in
             try GarminConfig.fetchOne(db)
         }
     }

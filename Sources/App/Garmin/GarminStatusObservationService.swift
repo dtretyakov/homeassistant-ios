@@ -8,12 +8,12 @@ final class GarminStatusObservationService {
     typealias ConfigProvider = () -> GarminConfig?
     typealias SnapshotProvider = (
         GarminConfig,
-        @escaping (Swift.Result<GarminStatusSnapshot, GarminBridgeError>) -> Void
+        @escaping (Swift.Result<GarminStatusSnapshot, GarminIntegrationError>) -> Void
     ) -> Void
     typealias SubscriptionProvider = (
         GarminConfig,
         @escaping () -> Void,
-        @escaping (GarminBridgeError) -> Void
+        @escaping (GarminIntegrationError) -> Void
     ) -> HACancellable?
 
     private let client: GarminConnectIQClient
@@ -176,7 +176,7 @@ final class GarminStatusObservationService {
             Current.Log.error("Garmin status subscription unavailable")
             GarminDiagnostics.record(.statusObservation, status: .failed, metadata: [
                 "subscription_state": "unavailable",
-                "error_code": GarminBridgeError.homeAssistantUnavailable.rawValue,
+                "error_code": GarminIntegrationError.homeAssistantUnavailable.rawValue,
                 "status_count": signature.statusIds.count,
             ])
             scheduleSnapshotRefresh(config: config, signature: signature)
@@ -324,7 +324,7 @@ final class GarminStatusObservationService {
     private static func subscribeToStatusChanges(
         config: GarminConfig,
         onStateChange: @escaping () -> Void,
-        onFailure: @escaping (GarminBridgeError) -> Void
+        onFailure: @escaping (GarminIntegrationError) -> Void
     ) -> HACancellable? {
         let itemsByServer = Dictionary(grouping: observedStatusItems(config), by: \.serverId)
         let cancellable = GarminCompositeCancellable()
@@ -347,7 +347,7 @@ final class GarminStatusObservationService {
 
             let tracker = GarminObservedEntityStateTracker(entityIds: Set(items.map(\.id)))
             cancellable.append(api.connection.caches.states(filter).subscribe { _, states in
-                if tracker.shouldRefresh(states: states.all) {
+                if tracker.shouldRefresh(states: Array(states.all)) {
                     onStateChange()
                 }
             })

@@ -51,7 +51,7 @@ final class GarminStatusSnapshotService {
     func snapshotWithCacheFallback(
         config: GarminConfig,
         itemInfo: ItemInfoProvider
-    ) async -> Result<GarminStatusSnapshot, GarminBridgeError> {
+    ) async -> Result<GarminStatusSnapshot, GarminIntegrationError> {
         let statusIds = Self.statusIds(for: config)
         do {
             let snapshot = try await snapshot(config: config, itemInfo: itemInfo)
@@ -73,13 +73,13 @@ final class GarminStatusSnapshotService {
                 ])
                 return .success(cachedSnapshot)
             }
-            let bridgeError = (error as? GarminBridgeError) ?? .homeAssistantUnavailable
+            let integrationError = (error as? GarminIntegrationError) ?? .homeAssistantUnavailable
             GarminDiagnostics.record(.statusSnapshot, status: .failed, metadata: [
                 "cache_status": "unavailable",
-                "error_code": bridgeError.rawValue,
+                "error_code": integrationError.rawValue,
                 "status_count": statusIds.count,
             ])
-            return .failure(bridgeError)
+            return .failure(integrationError)
         }
     }
 

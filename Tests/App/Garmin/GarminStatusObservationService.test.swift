@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import HAKit
 @testable import HomeAssistant
@@ -181,7 +182,7 @@ struct GarminStatusObservationServiceTests {
     @Test func subscriptionFailureTriggersSnapshotFallbackRefresh() async throws {
         try GarminStatusSnapshotCache.clear()
         let item = statusItem("sensor.temperature")
-        var onFailure: ((GarminBridgeError) -> Void)?
+        var onFailure: ((GarminIntegrationError) -> Void)?
         var currentValue = "20 °C"
         let client = RecordingGarminStatusClient()
         let service = makeService(
@@ -342,13 +343,22 @@ struct GarminStatusObservationServiceTests {
 }
 
 private final class RecordingGarminStatusClient: GarminConnectIQClient {
-    var state: GarminConnectionState = .ready(deviceName: "Test Garmin")
+    var state: GarminConnectionState = .ready(deviceName: "Test Garmin") {
+        didSet {
+            guard state != oldValue else { return }
+            stateSubject.send(state)
+        }
+    }
+    var statePublisher: AnyPublisher<GarminConnectionState, Never> {
+        stateSubject.eraseToAnyPublisher()
+    }
+    private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
     var sentProfiles: [GarminProfile] = []
     var sentStatusSnapshots: [GarminStatusSnapshot] = []
     var sentResults: [GarminCommandResult] = []
 
     private let automaticallyCompleteSends: Bool
-    private var sendCompletions: [(Swift.Result<Void, GarminBridgeError>) -> Void] = []
+    private var sendCompletions: [(Swift.Result<Void, GarminIntegrationError>) -> Void] = []
 
     init(automaticallyCompleteSends: Bool = true) {
         self.automaticallyCompleteSends = automaticallyCompleteSends
@@ -356,14 +366,14 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {}
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminBridgeError>) -> Void) {
+    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
         sentProfiles.append(profile)
         completion(.success(()))
     }
 
     func sendStatusSnapshot(
         _ snapshot: GarminStatusSnapshot,
-        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentStatusSnapshots.append(snapshot)
         if automaticallyCompleteSends {
@@ -375,9 +385,16 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
 
     func sendActionResult(
         _ result: GarminCommandResult,
-        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentResults.append(result)
+        completion(.success(()))
+    }
+
+    func sendConnectionStatus(
+        _ status: GarminConnectionStatus,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
         completion(.success(()))
     }
 
@@ -385,7 +402,13 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
         state = .notConfigured
     }
 
-    func completeNextSend(_ result: Swift.Result<Void, GarminBridgeError>) {
+    func requestDeviceSelection(force: Bool) {}
+
+    func handleDeviceSelectionResponse(_ url: URL) -> Bool {
+        false
+    }
+
+    func completeNextSend(_ result: Swift.Result<Void, GarminIntegrationError>) {
         guard !sendCompletions.isEmpty else {
             Issue.record("Expected pending Garmin send completion")
             return

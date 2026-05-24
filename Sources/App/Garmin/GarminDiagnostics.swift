@@ -38,6 +38,7 @@ enum GarminDiagnostics {
         "send_state",
         "subscription_state",
         "correlation_id",
+        "check_type",
         "sdk_state",
     ]
 
@@ -61,6 +62,10 @@ enum GarminDiagnostics {
         switch state {
         case .notConfigured:
             return "not_configured"
+        case .selectingDevice:
+            return "selecting_device"
+        case .waitingForWatch:
+            return "waiting_for_watch"
         case .sdkUnavailable:
             return "sdk_unavailable"
         case .appUnavailable:

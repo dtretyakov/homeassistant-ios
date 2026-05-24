@@ -45,26 +45,6 @@ struct DatabaseTableProtocolTests {
         #expect(Set(table.definedColumns) == Set(expectedColumns))
     }
 
-    @Test("GarminConfigTable conforms to DatabaseTableProtocol")
-    func garminConfigTableConformance() throws {
-        let table = GarminConfigTable()
-        #expect(table.tableName == GRDBDatabaseTable.garminConfig.rawValue)
-        #expect(!table.definedColumns.isEmpty, "definedColumns should not be empty")
-
-        let expectedColumns = DatabaseTables.GarminConfig.allCases.map(\.rawValue)
-        #expect(Set(table.definedColumns) == Set(expectedColumns))
-    }
-
-    @Test("GarminStatusSnapshotCacheTable conforms to DatabaseTableProtocol")
-    func garminStatusSnapshotCacheTableConformance() throws {
-        let table = GarminStatusSnapshotCacheTable()
-        #expect(table.tableName == GRDBDatabaseTable.garminStatusSnapshotCache.rawValue)
-        #expect(!table.definedColumns.isEmpty, "definedColumns should not be empty")
-
-        let expectedColumns = DatabaseTables.GarminStatusSnapshotCache.allCases.map(\.rawValue)
-        #expect(Set(table.definedColumns) == Set(expectedColumns))
-    }
-
     @Test("AssistPipelinesTable conforms to DatabaseTableProtocol")
     func assistPipelinesTableConformance() throws {
         let table = AssistPipelinesTable()

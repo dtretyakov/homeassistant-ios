@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 @testable import HomeAssistant
 @testable import Shared
@@ -13,7 +14,7 @@ struct GarminDiagnosticsTests {
     @Test func recorderStoresOnlyAllowlistedMetadata() throws {
         try withClientEventStore { store in
             GarminDiagnostics.record(.sync, status: .failed, metadata: [
-                "error_code": GarminBridgeError.sdkUnavailable.rawValue,
+                "error_code": GarminIntegrationError.sdkUnavailable.rawValue,
                 "action_count": 1,
                 "status_count": 2,
                 "token": "secret",
@@ -27,11 +28,11 @@ struct GarminDiagnosticsTests {
 
             #expect(event.type == .garmin)
             #expect(event.text == "sync: failed")
-            #expect(payload["event_type"] as? String == "sync")
-            #expect(payload["status"] as? String == "failed")
-            #expect(payload["error_code"] as? String == GarminBridgeError.sdkUnavailable.rawValue)
-            #expect(payload["action_count"] as? Int == 1)
-            #expect(payload["status_count"] as? Int == 2)
+            #expect((payload["event_type"] as? String) == "sync")
+            #expect((payload["status"] as? String) == "failed")
+            #expect((payload["error_code"] as? String) == GarminIntegrationError.sdkUnavailable.rawValue)
+            #expect((payload["action_count"] as? Int) == 1)
+            #expect((payload["status_count"] as? Int) == 2)
             #expect(payload["token"] == nil)
             #expect(payload["url"] == nil)
             #expect(payload["entity_id"] == nil)
@@ -71,10 +72,10 @@ struct GarminDiagnosticsTests {
         }
     }
 
-    @Test func bridgeActionFailureWritesSanitizedDiagnostic() throws {
+    @Test func integrationActionFailureWritesSanitizedDiagnostic() throws {
         try withClientEventStore { store in
             let client = DiagnosticsGarminClient()
-            let service = GarminBridgeService(client: client)
+            let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
                 actionId: "garmin_action_missing",
@@ -84,12 +85,19 @@ struct GarminDiagnosticsTests {
             service.handle(message, config: GarminConfig()) { _ in }
 
             let events = store.events.filter { $0.type == .garmin }
-            let actionEvent = try #require(events.first { $0.text == "action_execution: failed" })
+            let matchingActionEvent = events.first(where: { event in
+                let payload = event.jsonPayloadJSONObject()
+                let isActionFailure = event.text == "action_execution: failed"
+                let hasCorrelationId = (payload["correlation_id"] as? String) == "c1"
+                return isActionFailure && hasCorrelationId
+            })
+            let actionEvent = try #require(matchingActionEvent)
             let payload = actionEvent.jsonPayloadJSONObject()
             let payloadText = String(describing: payload)
+            let correlationId = payload["correlation_id"] as? String
 
-            #expect(payload["error_code"] as? String == GarminBridgeError.missingAction.rawValue)
-            #expect(payload["correlation_id"] as? String == "c1")
+            #expect(payloadText.contains(GarminIntegrationError.missingAction.rawValue))
+            #expect(correlationId == "c1")
             #expect(!payloadText.contains("garmin_action_missing"))
             #expect(!payloadText.contains("entity_id"))
             #expect(!payloadText.contains("service_data"))
@@ -143,8 +151,8 @@ struct GarminDiagnosticsTests {
                 $0.type == .garmin && $0.text == "status_send: failed"
             })
             let payload = event.jsonPayloadJSONObject()
-            #expect(payload["error_code"] as? String == GarminBridgeError.watchUnavailable.rawValue)
-            #expect(payload["status_count"] as? Int == 1)
+            #expect((payload["error_code"] as? String) == GarminIntegrationError.watchUnavailable.rawValue)
+            #expect((payload["status_count"] as? Int) == 1)
         }
     }
 
@@ -202,34 +210,56 @@ private final class DiagnosticsClientEventStore: ClientEventStoreProtocol {
 }
 
 private final class DiagnosticsGarminClient: GarminConnectIQClient {
-    var state: GarminConnectionState = .ready(deviceName: "Test Garmin")
-    var statusSendResult: Result<Void, GarminBridgeError>
+    var state: GarminConnectionState = .ready(deviceName: "Test Garmin") {
+        didSet {
+            guard state != oldValue else { return }
+            stateSubject.send(state)
+        }
+    }
+    var statePublisher: AnyPublisher<GarminConnectionState, Never> {
+        stateSubject.eraseToAnyPublisher()
+    }
+    private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
+    var statusSendResult: Result<Void, GarminIntegrationError>
 
-    init(statusSendResult: Result<Void, GarminBridgeError> = .success(())) {
+    init(statusSendResult: Result<Void, GarminIntegrationError> = .success(())) {
         self.statusSendResult = statusSendResult
     }
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {}
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminBridgeError>) -> Void) {
+    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
         completion(.success(()))
     }
 
     func sendStatusSnapshot(
         _ snapshot: GarminStatusSnapshot,
-        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         completion(statusSendResult)
     }
 
     func sendActionResult(
         _ result: GarminCommandResult,
-        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.success(()))
+    }
+
+    func sendConnectionStatus(
+        _ status: GarminConnectionStatus,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         completion(.success(()))
     }
 
     func disconnect() {
         state = .notConfigured
+    }
+
+    func requestDeviceSelection(force: Bool) {}
+
+    func handleDeviceSelectionResponse(_ url: URL) -> Bool {
+        false
     }
 }

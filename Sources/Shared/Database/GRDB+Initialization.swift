@@ -56,8 +56,6 @@ public extension DatabaseQueue {
             WatchConfigTable(),
             CarPlayConfigTable(),
             AppIconShortcutConfigTable(),
-            GarminConfigTable(),
-            GarminStatusSnapshotCacheTable(),
             AssistPipelinesTable(),
             ServerInfoMirrorTable(),
             AppEntityRegistryListForDisplayTable(),
@@ -92,7 +90,7 @@ public extension DatabaseQueue {
     }
 }
 
-protocol DatabaseTableProtocol {
+public protocol DatabaseTableProtocol {
     /// The name of the database table
     var tableName: String { get }
 
@@ -103,7 +101,7 @@ protocol DatabaseTableProtocol {
     func createIfNeeded(database: DatabaseQueue) throws
 }
 
-extension DatabaseTableProtocol {
+public extension DatabaseTableProtocol {
     /// Migrates the table by adding new columns and removing obsolete columns
     func migrateColumns(database: DatabaseQueue) throws {
         try database.write { db in

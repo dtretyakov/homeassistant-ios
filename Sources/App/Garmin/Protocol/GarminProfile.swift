@@ -1,4 +1,5 @@
 import Foundation
+import Shared
 
 public struct GarminProfile: Codable, Equatable {
     public static let currentVersion = 1

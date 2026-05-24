@@ -1,27 +1,40 @@
+import Combine
 import HAKit
 @testable import HomeAssistant
+import PromiseKit
 @testable import Shared
 import Testing
 
 final class FakeGarminConnectIQClient: GarminConnectIQClient {
-    var state: GarminConnectionState = .ready(deviceName: "Test Garmin")
+    var state: GarminConnectionState = .ready(deviceName: "Test Garmin") {
+        didSet {
+            guard state != oldValue else { return }
+            stateSubject.send(state)
+        }
+    }
+    var statePublisher: AnyPublisher<GarminConnectionState, Never> {
+        stateSubject.eraseToAnyPublisher()
+    }
+    private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
     var sentResults: [GarminCommandResult] = []
+    var sentConnectionStatuses: [GarminConnectionStatus] = []
     var sentProfiles: [GarminProfile] = []
     var sentStatusSnapshots: [GarminStatusSnapshot] = []
+    var didRequestDeviceSelection = false
     private var commandHandler: ((GarminInboundMessage) -> Void)?
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {
         self.commandHandler = commandHandler
     }
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminBridgeError>) -> Void) {
+    func sendProfile(_ profile: GarminProfile, completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) {
         sentProfiles.append(profile)
         completion(.success(()))
     }
 
     func sendStatusSnapshot(
         _ snapshot: GarminStatusSnapshot,
-        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentStatusSnapshots.append(snapshot)
         completion(.success(()))
@@ -29,22 +42,131 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
 
     func sendActionResult(
         _ result: GarminCommandResult,
-        completion: @escaping (Result<Void, GarminBridgeError>) -> Void
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentResults.append(result)
+        completion(.success(()))
+    }
+
+    func sendConnectionStatus(
+        _ status: GarminConnectionStatus,
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        sentConnectionStatuses.append(status)
         completion(.success(()))
     }
 
     func disconnect() {
         state = .notConfigured
     }
+
+    func requestDeviceSelection(force: Bool) {
+        didRequestDeviceSelection = true
+        state = .selectingDevice
+    }
+
+    func handleDeviceSelectionResponse(_ url: URL) -> Bool {
+        false
+    }
+}
+
+private final class GarminFakeWebhookManager: WebhookManager {
+    var sendRequestHandler: ((WebhookResponseIdentifier, Server, WebhookRequest, Resolver<Void>) -> Void)?
+
+    override func send(
+        identifier: WebhookResponseIdentifier = .unhandled,
+        server: Server,
+        request: WebhookRequest
+    ) -> Promise<Void> {
+        let (promise, seal) = Promise<Void>.pending()
+        sendRequestHandler?(identifier, server, request, seal)
+        return promise
+    }
 }
 
 @Suite(.serialized)
-struct GarminBridgeServiceTests {
+struct GarminIntegrationServiceTests {
+    @Test func pingSendsConnectionStatusWithoutConfig() throws {
+        let client = FakeGarminConnectIQClient()
+        let service = GarminIntegrationService(client: client)
+        service.setup { nil }
+
+        service.handle(GarminInboundMessage(type: .ping, correlationId: "h1"))
+
+        #expect(client.sentConnectionStatuses == [
+            GarminConnectionStatus(correlationId: "h1", state: .success),
+        ])
+        #expect(client.sentResults.isEmpty)
+    }
+
+    @Test func unsupportedPingProtocolSendsConnectionStatusError() throws {
+        let client = FakeGarminConnectIQClient()
+        let service = GarminIntegrationService(client: client)
+        service.setup { nil }
+
+        service.handle(GarminInboundMessage(version: 999, type: .ping, correlationId: "h1"))
+
+        #expect(client.sentConnectionStatuses == [
+            GarminConnectionStatus(correlationId: "h1", state: .failed, error: .unsupportedProtocol),
+        ])
+        #expect(client.sentResults.isEmpty)
+    }
+
+    @Test func sdkClientRejectsOversizedProfileBeforeTransportSend() throws {
+        let client = GarminConnectIQSDKClient()
+        let oversizedLabel = String(repeating: "A", count: GarminPayloadLimits.outboundMessageBytes)
+        let profile = GarminProfile(actions: [
+            .init(id: "garmin_action_1", label: oversizedLabel),
+        ])
+        var sendResult: Swift.Result<Void, GarminIntegrationError>?
+
+        client.sendProfile(profile) { result in
+            sendResult = result
+        }
+
+        guard case let .failure(error) = sendResult else {
+            Issue.record("Expected oversized payload to fail")
+            return
+        }
+        #expect(error == .payloadTooLarge)
+    }
+
+    @Test func syncDoesNotRequestDeviceSelectionWhenNotConfigured() throws {
+        let client = FakeGarminConnectIQClient()
+        client.state = .notConfigured
+        let service = GarminIntegrationService(client: client)
+        var syncResult: Swift.Result<Void, GarminIntegrationError>?
+
+        service.sync(config: GarminConfig(), itemInfo: { _ in nil }) { result in
+            syncResult = result
+        }
+
+        guard case let .failure(error) = syncResult else {
+            Issue.record("Expected sync to fail until Garmin device is selected")
+            return
+        }
+        #expect(error == .watchUnavailable)
+        #expect(!client.didRequestDeviceSelection)
+    }
+
+    @Test func connectionCheckRequestsDeviceSelection() throws {
+        let client = FakeGarminConnectIQClient()
+        let service = GarminIntegrationService(client: client)
+
+        service.requestDeviceSelection(force: true)
+
+        #expect(client.didRequestDeviceSelection)
+    }
+
+    @Test func connectIQURLFilterRejectsHomeAssistantDeepLinks() throws {
+        #expect(GarminFeature.canHandleConnectIQURL(URL(string: "homeassistant-garmin-ciq://device-select-resp")!))
+        #expect(!GarminFeature.canHandleConnectIQURL(URL(string: "homeassistant://perform_action")!))
+        #expect(!GarminFeature.canHandleConnectIQURL(URL(string: "homeassistant-dev://auth-callback")!))
+    }
+
     @Test func unsupportedProtocolFails() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         let message = GarminInboundMessage(version: 999, type: .callAction, correlationId: "c1")
         var handledResult: GarminCommandResult?
 
@@ -58,7 +180,7 @@ struct GarminBridgeServiceTests {
 
     @Test func requestProfileSendsSanitizedProfile() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity, displayText: "Kitchen")
         let message = GarminInboundMessage(type: .requestProfile, correlationId: "c1")
         var handledResult: GarminCommandResult?
@@ -74,7 +196,7 @@ struct GarminBridgeServiceTests {
 
     @Test func requestStatusWithoutProviderFailsWithoutEmptySnapshot() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temperature")
         let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
         var handledResult: GarminCommandResult?
@@ -90,7 +212,7 @@ struct GarminBridgeServiceTests {
 
     @Test func requestStatusSendsProviderSnapshot() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         let snapshot = GarminStatusSnapshot(
             statuses: [.init(id: "garmin_status_1", label: "Temperature", value: "22 °C")],
             updatedAt: 1_710_000_000
@@ -113,7 +235,7 @@ struct GarminBridgeServiceTests {
 
     @Test func requestStatusProviderFailureSendsExplicitError() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
         var handledResult: GarminCommandResult?
 
@@ -134,7 +256,7 @@ struct GarminBridgeServiceTests {
 
     @Test func missingConfigSendsResultForInboundMessage() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         service.setup { nil }
 
         service.handle(GarminInboundMessage(type: .requestProfile, correlationId: "c1"))
@@ -147,7 +269,7 @@ struct GarminBridgeServiceTests {
     @Test func missingActionFailsWithoutExecuting() throws {
         let client = FakeGarminConnectIQClient()
         var didExecute = false
-        let service = GarminBridgeService(client: client) { _, _, completion in
+        let service = GarminIntegrationService(client: client) { _, _, completion in
             didExecute = true
             completion(.success(()))
         }
@@ -169,7 +291,7 @@ struct GarminBridgeServiceTests {
         var didExecute = false
         let item = MagicItem(id: "climate.hallway", serverId: "server-1", type: .entity)
         let config = GarminConfig(actionItems: [item])
-        let service = GarminBridgeService(client: client) { _, _, completion in
+        let service = GarminIntegrationService(client: client) { _, _, completion in
             didExecute = true
             completion(.success(()))
         }
@@ -191,11 +313,11 @@ struct GarminBridgeServiceTests {
     }
 
     @Test func typedExecutorFailureIsPreserved() throws {
-        try withServer(identifier: "server-1") {
+        try withServer(identifier: "server-1") { _ in
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client) { _, _, completion in
+            let service = GarminIntegrationService(client: client) { _, _, completion in
                 completion(.failure(.loginRequired))
             }
             let message = GarminInboundMessage(
@@ -216,12 +338,12 @@ struct GarminBridgeServiceTests {
     }
 
     @Test func missingServerFailsWithoutExecuting() throws {
-        try withServer(identifier: "server-1") {
+        try withServer(identifier: "server-1") { _ in
             let client = FakeGarminConnectIQClient()
             var didExecute = false
             let item = MagicItem(id: "light.kitchen", serverId: "missing-server", type: .entity)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client) { _, _, completion in
+            let service = GarminIntegrationService(client: client) { _, _, completion in
                 didExecute = true
                 completion(.success(()))
             }
@@ -244,11 +366,11 @@ struct GarminBridgeServiceTests {
     }
 
     @Test func executorSuccessSendsSuccessWithCorrelationId() throws {
-        try withServer(identifier: "server-1") {
+        try withServer(identifier: "server-1") { _ in
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client) { _, _, completion in
+            let service = GarminIntegrationService(client: client) { _, _, completion in
                 completion(.success(()))
             }
             let message = GarminInboundMessage(
@@ -274,7 +396,7 @@ struct GarminBridgeServiceTests {
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "script.good_night", serverId: "server-1", type: .script)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client)
+            let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
                 actionId: GarminConfig.opaqueActionId(for: item),
@@ -284,10 +406,12 @@ struct GarminBridgeServiceTests {
             service.handle(message, config: config) { _ in }
 
             let request = try #require(capturedRequests().first)
+            let data = try #require(request.data as? [String: Any])
+            let serviceData = try #require(data["service_data"] as? [String: Any])
             #expect(request.type == "call_service")
-            #expect(request.data["domain"] as? String == "script")
-            #expect(request.data["service"] as? String == "turn_on")
-            #expect((request.data["service_data"] as? [String: Any])?["entity_id"] as? String == "script.good_night")
+            #expect(data["domain"] as? String == "script")
+            #expect(data["service"] as? String == "turn_on")
+            #expect(serviceData["entity_id"] as? String == "script.good_night")
         }
     }
 
@@ -296,7 +420,7 @@ struct GarminBridgeServiceTests {
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "scene.movie", serverId: "server-1", type: .scene)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client)
+            let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
                 actionId: GarminConfig.opaqueActionId(for: item),
@@ -306,10 +430,12 @@ struct GarminBridgeServiceTests {
             service.handle(message, config: config) { _ in }
 
             let request = try #require(capturedRequests().first)
+            let data = try #require(request.data as? [String: Any])
+            let serviceData = try #require(data["service_data"] as? [String: Any])
             #expect(request.type == "call_service")
-            #expect(request.data["domain"] as? String == "scene")
-            #expect(request.data["service"] as? String == "turn_on")
-            #expect((request.data["service_data"] as? [String: Any])?["entity_id"] as? String == "scene.movie")
+            #expect(data["domain"] as? String == "scene")
+            #expect(data["service"] as? String == "turn_on")
+            #expect(serviceData["entity_id"] as? String == "scene.movie")
         }
     }
 
@@ -323,7 +449,7 @@ struct GarminBridgeServiceTests {
 
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client)
+            let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
                 actionId: GarminConfig.opaqueActionId(for: item),
@@ -350,7 +476,7 @@ struct GarminBridgeServiceTests {
 
             let item = MagicItem(id: "cover.garage", serverId: "server-1", type: .entity)
             let config = GarminConfig(actionItems: [item])
-            let service = GarminBridgeService(client: client)
+            let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
                 actionId: GarminConfig.opaqueActionId(for: item),
@@ -381,7 +507,7 @@ struct GarminBridgeServiceTests {
 
     @Test func syncSendsSanitizedProfile() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminBridgeService(client: client)
+        let service = GarminIntegrationService(client: client)
         let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity, displayText: "Kitchen")
         var didSync = false
 
@@ -422,7 +548,7 @@ struct GarminBridgeServiceTests {
     ) throws {
         try withServer(identifier: "server-1") { _ in
             let previousWebhooks = Current.webhooks
-            let webhooks = FakeWebhookManager()
+            let webhooks = GarminFakeWebhookManager()
             var capturedRequests: [WebhookRequest] = []
             webhooks.sendRequestHandler = { _, _, request, resolver in
                 capturedRequests.append(request)
