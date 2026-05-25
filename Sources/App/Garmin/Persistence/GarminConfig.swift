@@ -13,6 +13,8 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
     public var statusItems: [MagicItem] = []
     public var deviceIdentifier: String?
     public var appIdentifier: String?
+    public var deviceName: String?
+    public var lastCommunicationTimestamp: TimeInterval?
     public var lastSyncTimestamp: TimeInterval?
     public var lastError: String?
 
@@ -23,6 +25,8 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
         statusItems: [MagicItem] = [],
         deviceIdentifier: String? = nil,
         appIdentifier: String? = nil,
+        deviceName: String? = nil,
+        lastCommunicationTimestamp: TimeInterval? = nil,
         lastSyncTimestamp: TimeInterval? = nil,
         lastError: String? = nil
     ) {
@@ -32,6 +36,8 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
         self.statusItems = statusItems
         self.deviceIdentifier = deviceIdentifier
         self.appIdentifier = appIdentifier
+        self.deviceName = deviceName
+        self.lastCommunicationTimestamp = lastCommunicationTimestamp
         self.lastSyncTimestamp = lastSyncTimestamp
         self.lastError = lastError
     }

@@ -88,13 +88,13 @@ struct GarminDiagnosticsTests {
             let matchingActionEvent = events.first(where: { event in
                 let payload = event.jsonPayloadJSONObject()
                 let isActionFailure = event.text == "action_execution: failed"
-                let hasCorrelationId = (payload["correlation_id"] as? String) == "c1"
+                let hasCorrelationId = (payload["id"] as? String) == "c1"
                 return isActionFailure && hasCorrelationId
             })
             let actionEvent = try #require(matchingActionEvent)
             let payload = actionEvent.jsonPayloadJSONObject()
             let payloadText = String(describing: payload)
-            let correlationId = payload["correlation_id"] as? String
+            let correlationId = payload["id"] as? String
 
             #expect(payloadText.contains(GarminIntegrationError.missingAction.rawValue))
             #expect(correlationId == "c1")

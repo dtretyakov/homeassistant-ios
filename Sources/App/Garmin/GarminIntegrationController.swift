@@ -5,6 +5,8 @@ import Shared
 protocol GarminIntegrationControlling: AnyObject {
     var connectionState: GarminConnectionState { get }
     var connectionStatePublisher: AnyPublisher<GarminConnectionState, Never> { get }
+    var connectionDiagnostics: GarminConnectionDiagnostics { get }
+    var connectionDiagnosticsPublisher: AnyPublisher<GarminConnectionDiagnostics, Never> { get }
     func setup()
     func handleConnectIQURL(_ url: URL) -> Bool
     func requestConnectionCheck(force: Bool)
@@ -26,9 +28,14 @@ final class GarminIntegrationController: GarminIntegrationControlling {
     private var isSetup = false
 
     private let connectionStateSubject: CurrentValueSubject<GarminConnectionState, Never>
+    private let connectionDiagnosticsSubject: CurrentValueSubject<GarminConnectionDiagnostics, Never>
     var connectionState: GarminConnectionState { connectionStateSubject.value }
     var connectionStatePublisher: AnyPublisher<GarminConnectionState, Never> {
         connectionStateSubject.eraseToAnyPublisher()
+    }
+    var connectionDiagnostics: GarminConnectionDiagnostics { connectionDiagnosticsSubject.value }
+    var connectionDiagnosticsPublisher: AnyPublisher<GarminConnectionDiagnostics, Never> {
+        connectionDiagnosticsSubject.eraseToAnyPublisher()
     }
 
     init(
@@ -41,12 +48,23 @@ final class GarminIntegrationController: GarminIntegrationControlling {
         self.statusSnapshotService = statusSnapshotService
         self.magicItemProvider = magicItemProvider
         self.connectionStateSubject = CurrentValueSubject(client.state)
+        self.connectionDiagnosticsSubject = CurrentValueSubject(
+            (client as? GarminConnectionDiagnosticsProviding)?.connectionDiagnostics ?? .idle
+        )
 
         client.statePublisher
             .sink { [connectionStateSubject] state in
                 connectionStateSubject.send(state)
             }
             .store(in: &cancellables)
+
+        if let diagnosticsProvider = client as? GarminConnectionDiagnosticsProviding {
+            diagnosticsProvider.connectionDiagnosticsPublisher
+                .sink { [connectionDiagnosticsSubject] diagnostics in
+                    connectionDiagnosticsSubject.send(diagnostics)
+                }
+                .store(in: &cancellables)
+        }
     }
 
     func setup() {
@@ -113,9 +131,14 @@ final class GarminIntegrationController: GarminIntegrationControlling {
 
 final class DisabledGarminIntegrationController: GarminIntegrationControlling {
     private let connectionStateSubject: CurrentValueSubject<GarminConnectionState, Never>
+    private let connectionDiagnosticsSubject = CurrentValueSubject<GarminConnectionDiagnostics, Never>(.idle)
     var connectionState: GarminConnectionState { connectionStateSubject.value }
     var connectionStatePublisher: AnyPublisher<GarminConnectionState, Never> {
         connectionStateSubject.eraseToAnyPublisher()
+    }
+    var connectionDiagnostics: GarminConnectionDiagnostics { connectionDiagnosticsSubject.value }
+    var connectionDiagnosticsPublisher: AnyPublisher<GarminConnectionDiagnostics, Never> {
+        connectionDiagnosticsSubject.eraseToAnyPublisher()
     }
 
     init(state: GarminConnectionState = .sdkUnavailable) {

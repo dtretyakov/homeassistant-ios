@@ -6,27 +6,28 @@ import Testing
 struct GarminProfileTests {
     @Test func inboundPingDictionaryDecodes() throws {
         let message = try GarminPayloadCodec.decodeInboundDictionary([
-            "version": 1,
             "type": "ping",
-            "correlation_id": "h123",
+            "id": "h123",
         ])
 
         #expect(message == GarminInboundMessage(type: .ping, correlationId: "h123"))
     }
 
-    @Test func connectionStatusEncodingUsesStableSnakeCaseKeys() throws {
+    @Test func connectionStatusEncodingUsesFlatCompactKeys() throws {
         let message = GarminOutboundMessage(
             type: .connectionStatus,
             connectionStatus: .init(correlationId: "h123", state: .success)
         )
-        let encoded = try String(decoding: JSONEncoder().encode(message), as: UTF8.self)
         let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(message)
+        let encoded = try String(decoding: JSONSerialization.data(withJSONObject: dictionary), as: UTF8.self)
 
         #expect(encoded.contains("\"type\":\"connection_status\""))
-        #expect(encoded.contains("\"connection_status\""))
-        #expect(encoded.contains("\"correlation_id\""))
-        #expect(encoded.contains("\"max_payload_bytes\":4096"))
-        #expect((dictionary["connection_status"] as? [String: Any])?["correlation_id"] as? String == "h123")
+        #expect(encoded.contains("\"id\":\"h123\""))
+        #expect(encoded.contains("\"state\":\"ok\""))
+        #expect(!encoded.contains("\"connection_status\""))
+        #expect(!encoded.contains("\"correlation_id\""))
+        #expect(!encoded.contains("\"max_payload_bytes\""))
+        #expect(dictionary["id"] as? String == "h123")
     }
 
     @Test func payloadByteLimitCanRejectLargeOutboundMessage() throws {

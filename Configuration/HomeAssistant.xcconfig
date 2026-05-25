@@ -1,7 +1,8 @@
 VERSIONING_SYSTEM = apple-generic
 #include "Version.xcconfig"
 
-DEVELOPMENT_TEAM = QMQYCKL255
+HA_DEVELOPMENT_TEAM = QMQYCKL255
+DEVELOPMENT_TEAM = $(HA_DEVELOPMENT_TEAM)
 BUNDLE_ID_PREFIX = io.robbie
 ENABLE_CRITICAL_ALERTS_QMQYCKL255 = 1
 ENABLE_PUSH_PROVIDER_QMQYCKL255 = 1
@@ -21,6 +22,10 @@ DEAD_CODE_STRIPPING[sdk=watchos*] = NO
 // release builds override this
 CODE_SIGN_IDENTITY = Apple Development
 CODE_SIGN_STYLE_DEFAULT = Automatic
+APP_CODE_SIGN_ENTITLEMENTS = Configuration/Entitlements/App-ios.entitlements
+APP_CATALYST_CODE_SIGN_ENTITLEMENTS = Configuration/Entitlements/App-catalyst.entitlements
+EXTENSION_CODE_SIGN_ENTITLEMENTS = Configuration/Entitlements/Extension-ios.entitlements
+EXTENSION_CATALYST_CODE_SIGN_ENTITLEMENTS = Configuration/Entitlements/Extension-catalyst.entitlements
 
 // Create this file to override configuration. It's ignored by git
 #include? "HomeAssistant.overrides.xcconfig"

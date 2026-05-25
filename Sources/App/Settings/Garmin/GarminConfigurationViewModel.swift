@@ -10,6 +10,7 @@ final class GarminConfigurationViewModel: ObservableObject {
     @Published var showError = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var connectionState: GarminConnectionState = .notConfigured
+    @Published private(set) var connectionDiagnostics = GarminConnectionDiagnostics.idle
     @Published private(set) var discoveryResult = GarminEntityDiscoveryResult.empty
 
     private let magicItemProvider = Current.magicItemProvider()
@@ -31,6 +32,13 @@ final class GarminConfigurationViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 self?.connectionState = state
+                self?.refreshPersistedConnectionFields()
+            }
+            .store(in: &cancellables)
+        integrationController.connectionDiagnosticsPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] diagnostics in
+                self?.connectionDiagnostics = diagnostics
             }
             .store(in: &cancellables)
         do {
@@ -39,6 +47,7 @@ final class GarminConfigurationViewModel: ObservableObject {
             Current.Log.error("Failed to initialize Garmin database schema, error: \(error.localizedDescription)")
         }
         connectionState = integrationController.connectionState
+        connectionDiagnostics = integrationController.connectionDiagnostics
     }
 
     @MainActor
@@ -202,6 +211,8 @@ final class GarminConfigurationViewModel: ObservableObject {
         connectionState = integrationController.connectionState
         config.deviceIdentifier = nil
         config.appIdentifier = nil
+        config.deviceName = nil
+        config.lastCommunicationTimestamp = nil
         config.lastError = nil
         GarminDiagnostics.record(.disconnect, status: .success, metadata: [
             "connection_state": GarminDiagnostics.connectionState(connectionState),
@@ -277,6 +288,15 @@ final class GarminConfigurationViewModel: ObservableObject {
             ])
             discoveryResult = .empty
         }
+    }
+
+    private func refreshPersistedConnectionFields() {
+        guard let persistedConfig = try? GarminConfig.config() else { return }
+        config.deviceIdentifier = persistedConfig.deviceIdentifier
+        config.appIdentifier = persistedConfig.appIdentifier
+        config.deviceName = persistedConfig.deviceName
+        config.lastCommunicationTimestamp = persistedConfig.lastCommunicationTimestamp
+        config.lastError = persistedConfig.lastError
     }
 
     private func showError(message: String) {

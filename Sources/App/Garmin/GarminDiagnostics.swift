@@ -37,9 +37,12 @@ enum GarminDiagnostics {
         "cache_status",
         "send_state",
         "subscription_state",
-        "correlation_id",
+        "id",
         "check_type",
         "sdk_state",
+        "sdk_result",
+        "inbound_bytes",
+        "outbound_bytes",
     ]
 
     static func record(

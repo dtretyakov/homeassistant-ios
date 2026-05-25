@@ -171,6 +171,51 @@ struct GarminConfigurationViewModelTests {
         }
     }
 
+    @Test func disconnectUnpairsWatchWithoutRemovingContent() throws {
+        try withViewModel { viewModel in
+            let action = MagicItem(id: "script.good_morning", serverId: "server-1", type: .script)
+            let status = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
+            viewModel.config.selectedServerId = "server-1"
+            viewModel.config.deviceIdentifier = "garmin-device"
+            viewModel.config.appIdentifier = "garmin-app"
+            viewModel.config.deviceName = "Venu 2"
+            viewModel.config.lastCommunicationTimestamp = 456
+            viewModel.config.actionItems = [action]
+            viewModel.config.statusItems = [status]
+
+            viewModel.disconnect()
+
+            #expect(viewModel.config.deviceIdentifier == nil)
+            #expect(viewModel.config.appIdentifier == nil)
+            #expect(viewModel.config.deviceName == nil)
+            #expect(viewModel.config.lastCommunicationTimestamp == nil)
+            #expect(viewModel.config.selectedServerId == "server-1")
+            #expect(viewModel.config.actionItems == [action])
+            #expect(viewModel.config.statusItems == [status])
+        }
+    }
+
+    @Test func connectionStateRefreshesPersistedPairingFields() async throws {
+        try await withViewModel { viewModel, controller in
+            try Current.database().write { db in
+                var config = viewModel.config
+                config.deviceIdentifier = "garmin-device"
+                config.appIdentifier = "garmin-app"
+                config.deviceName = "Venu 2"
+                config.lastCommunicationTimestamp = 456
+                try config.insert(db, onConflict: .replace)
+            }
+
+            controller.publishConnectionState(.ready(deviceName: "Venu 2"))
+            try await Task.sleep(nanoseconds: 20_000_000)
+
+            #expect(viewModel.config.deviceIdentifier == "garmin-device")
+            #expect(viewModel.config.appIdentifier == "garmin-app")
+            #expect(viewModel.config.deviceName == "Venu 2")
+            #expect(viewModel.config.lastCommunicationTimestamp == 456)
+        }
+    }
+
     @Test func addSupportedStatusStoresItemLocally() throws {
         try withViewModel { viewModel in
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
@@ -291,13 +336,32 @@ struct GarminConfigurationViewModelTests {
         let viewModel = GarminConfigurationViewModel(integrationController: controller)
         try body(viewModel, controller)
     }
+
+    private func withViewModel(
+        _ body: (GarminConfigurationViewModel, FakeGarminIntegrationController) async throws -> Void
+    ) async throws {
+        let database = try DatabaseQueue(path: ":memory:")
+        try GarminDatabaseSchema.createIfNeeded(database: database)
+        let previousDatabase = Current.database
+        Current.database = { database }
+        defer { Current.database = previousDatabase }
+
+        let controller = FakeGarminIntegrationController()
+        let viewModel = GarminConfigurationViewModel(integrationController: controller)
+        try await body(viewModel, controller)
+    }
 }
 
 private final class FakeGarminIntegrationController: GarminIntegrationControlling {
     private let connectionStateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
+    private let connectionDiagnosticsSubject = CurrentValueSubject<GarminConnectionDiagnostics, Never>(.idle)
     var connectionState: GarminConnectionState { connectionStateSubject.value }
     var connectionStatePublisher: AnyPublisher<GarminConnectionState, Never> {
         connectionStateSubject.eraseToAnyPublisher()
+    }
+    var connectionDiagnostics: GarminConnectionDiagnostics { connectionDiagnosticsSubject.value }
+    var connectionDiagnosticsPublisher: AnyPublisher<GarminConnectionDiagnostics, Never> {
+        connectionDiagnosticsSubject.eraseToAnyPublisher()
     }
 
     var didRequestConnectionCheck = false
@@ -312,6 +376,10 @@ private final class FakeGarminIntegrationController: GarminIntegrationControllin
     func requestConnectionCheck(force: Bool) {
         didRequestConnectionCheck = true
         connectionStateSubject.send(.selectingDevice)
+    }
+
+    func publishConnectionState(_ state: GarminConnectionState) {
+        connectionStateSubject.send(state)
     }
 
     func sync(

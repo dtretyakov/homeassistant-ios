@@ -20,6 +20,8 @@ final class GarminConfigTable: DatabaseTableProtocol {
                     t.column(Column.statusItems.rawValue, .jsonText).notNull()
                     t.column(Column.deviceIdentifier.rawValue, .text)
                     t.column(Column.appIdentifier.rawValue, .text)
+                    t.column(Column.deviceName.rawValue, .text)
+                    t.column(Column.lastCommunicationTimestamp.rawValue, .double)
                     t.column(Column.lastSyncTimestamp.rawValue, .double)
                     t.column(Column.lastError.rawValue, .text)
                 }
@@ -36,6 +38,8 @@ final class GarminConfigTable: DatabaseTableProtocol {
         case statusItems
         case deviceIdentifier
         case appIdentifier
+        case deviceName
+        case lastCommunicationTimestamp
         case lastSyncTimestamp
         case lastError
     }

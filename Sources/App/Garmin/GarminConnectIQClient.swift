@@ -33,6 +33,40 @@ protocol GarminConnectIQClient: AnyObject {
     func handleDeviceSelectionResponse(_ url: URL) -> Bool
 }
 
+struct GarminConnectionDiagnostics: Equatable {
+    static let idle = GarminConnectionDiagnostics()
+
+    var event = "idle"
+    var inboundBytes = 0
+    var outboundBytes = 0
+    var inboundType: String?
+    var outboundType: String?
+    var sdkResult: String?
+
+    var displayText: String {
+        var parts = [
+            event,
+            "in:\(inboundBytes)b",
+            "out:\(outboundBytes)b",
+        ]
+        if let inboundType {
+            parts.append("rx:\(inboundType)")
+        }
+        if let outboundType {
+            parts.append("tx:\(outboundType)")
+        }
+        if let sdkResult {
+            parts.append("sdk:\(sdkResult)")
+        }
+        return parts.joined(separator: " ")
+    }
+}
+
+protocol GarminConnectionDiagnosticsProviding: AnyObject {
+    var connectionDiagnostics: GarminConnectionDiagnostics { get }
+    var connectionDiagnosticsPublisher: AnyPublisher<GarminConnectionDiagnostics, Never> { get }
+}
+
 enum GarminConnectionState: Equatable {
     case notConfigured
     case selectingDevice

@@ -27,6 +27,8 @@ struct GarminConfigTests {
             actionItems: [item],
             deviceIdentifier: "garmin-device",
             appIdentifier: "garmin-app",
+            deviceName: "Venu 2",
+            lastCommunicationTimestamp: 456,
             lastSyncTimestamp: 123,
             lastError: nil
         )

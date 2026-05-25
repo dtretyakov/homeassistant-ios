@@ -194,7 +194,7 @@ final class GarminIntegrationService {
         }
         GarminDiagnostics.record(.actionExecution, status: .started, metadata: [
             "message_type": message.type.rawValue,
-            "correlation_id": message.correlationId ?? "",
+            "id": message.correlationId ?? "",
             "protocol_version": message.version,
             "command_state": GarminCommandState.pending.rawValue,
         ])
@@ -226,7 +226,7 @@ final class GarminIntegrationService {
         GarminDiagnostics.record(.actionExecution, status: result.state == .success ? .success : .failed, metadata: [
             "command_state": result.state.rawValue,
             "error_code": result.error?.rawValue ?? "",
-            "correlation_id": result.correlationId ?? "",
+            "id": result.correlationId ?? "",
         ])
         send(result, completion: completion)
     }
@@ -286,7 +286,7 @@ private extension GarminDiagnostics {
         record(.inboundMessage, status: status, metadata: [
             "message_type": message.type.rawValue,
             "protocol_version": message.version,
-            "correlation_id": message.correlationId ?? "",
+            "id": message.correlationId ?? "",
             "command_state": commandState?.rawValue ?? "",
             "error_code": error?.rawValue ?? "",
         ])

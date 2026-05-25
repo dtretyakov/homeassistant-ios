@@ -5,6 +5,7 @@ import SwiftUI
 struct GarminConfigurationView: View {
     @StateObject private var viewModel: GarminConfigurationViewModel
     @State private var isLoaded = false
+    @State private var isShowingUnpairConfirmation = false
 
     init(viewModel: GarminConfigurationViewModel = GarminConfigurationViewModel()) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -12,25 +13,31 @@ struct GarminConfigurationView: View {
 
     var body: some View {
         List {
+            connectionSection
+
             if viewModel.servers.isEmpty {
                 noServerSection
-            } else {
-                serverSection
-                connectionSection
+            } else if isGarminPaired {
+                if viewModel.servers.count > 1 {
+                    serverSection
+                }
                 recommendedActionsSection
                 actionsSection
                 if GarminFeature.supportsStatusItems {
                     recommendedStatusesSection
                     statusSection
                 }
-                diagnosticsSection
             }
+
+            #if DEBUG
+            diagnosticsSection
+            #endif
         }
         .navigationTitle("Garmin")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if !viewModel.config.actionItems.isEmpty || !viewModel.config.statusItems.isEmpty {
+                if isGarminPaired && (!viewModel.config.actionItems.isEmpty || !viewModel.config.statusItems.isEmpty) {
                     EditButton()
                 }
             }
@@ -67,11 +74,23 @@ struct GarminConfigurationView: View {
         .alert(viewModel.errorMessage ?? "Garmin error", isPresented: $viewModel.showError) {
             Button("OK") {}
         }
+        .confirmationDialog(
+            "Unpair Garmin Watch?",
+            isPresented: $isShowingUnpairConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Unpair Garmin Watch", role: .destructive) {
+                viewModel.disconnect()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the Garmin watch pairing from Home Assistant. Your actions and statuses will stay configured.")
+        }
     }
 
     private var noServerSection: some View {
         Section {
-            Text("Add a Home Assistant server before configuring Garmin.")
+            Text("Add a Home Assistant server before choosing Garmin actions and statuses.")
                 .foregroundStyle(.secondary)
             NavigationLink("Servers") {
                 SettingsServersView()
@@ -94,21 +113,43 @@ struct GarminConfigurationView: View {
     }
 
     private var connectionSection: some View {
-        Section("Connection") {
+        Section("Garmin Watch") {
             HStack {
-                Text("State")
+                Text("Paired device")
                 Spacer()
-                Text(connectionStateText)
+                Text(pairedDeviceText)
                     .foregroundStyle(.secondary)
             }
-            Button("Check connection") {
-                viewModel.checkConnection()
+            #if DEBUG
+            HStack {
+                Text("Last communication")
+                Spacer()
+                if let timestamp = viewModel.config.lastCommunicationTimestamp {
+                    Text(Date(timeIntervalSince1970: timestamp), style: .relative)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Never")
+                        .foregroundStyle(.secondary)
+                }
             }
-            Button("Sync to Garmin") {
-                viewModel.sync()
+            HStack(alignment: .top) {
+                Text("Transport")
+                Spacer()
+                Text(viewModel.connectionDiagnostics.displayText)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
             }
-            Button("Disconnect Garmin", role: .destructive) {
-                viewModel.disconnect()
+            #endif
+            if isGarminPaired {
+                Button("Unpair Garmin Watch", role: .destructive) {
+                    isShowingUnpairConfirmation = true
+                }
+            } else {
+                Button(pairingActionTitle) {
+                    viewModel.checkConnection()
+                }
+                .disabled(isPairingInProgress)
             }
         }
     }
@@ -269,22 +310,30 @@ struct GarminConfigurationView: View {
         return parts.joined(separator: " - ")
     }
 
-    private var connectionStateText: String {
+    private var isGarminPaired: Bool {
+        viewModel.config.deviceIdentifier != nil
+    }
+
+    private var pairedDeviceText: String {
+        guard viewModel.config.deviceIdentifier != nil else { return "Not paired" }
+        return viewModel.config.deviceName ?? "Garmin watch"
+    }
+
+    private var pairingActionTitle: String {
         switch viewModel.connectionState {
-        case .notConfigured:
-            return "Not paired"
-        case .selectingDevice:
-            return "Selecting watch"
-        case .waitingForWatch:
-            return "Waiting for watch"
-        case .sdkUnavailable:
-            return "SDK unavailable"
-        case .appUnavailable:
-            return "Garmin app unavailable"
-        case .deviceUnavailable:
-            return "Device unavailable"
-        case let .ready(deviceName):
-            return deviceName ?? "Ready"
+        case .selectingDevice, .waitingForWatch:
+            return "Pairing..."
+        case .notConfigured, .sdkUnavailable, .appUnavailable, .deviceUnavailable, .ready:
+            return "Pair Garmin Watch"
+        }
+    }
+
+    private var isPairingInProgress: Bool {
+        switch viewModel.connectionState {
+        case .selectingDevice, .waitingForWatch:
+            return true
+        case .notConfigured, .sdkUnavailable, .appUnavailable, .deviceUnavailable, .ready:
+            return false
         }
     }
 }
