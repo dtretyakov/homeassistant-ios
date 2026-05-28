@@ -21,12 +21,8 @@ struct GarminConfigurationView: View {
                 if viewModel.servers.count > 1 {
                     serverSection
                 }
-                recommendedActionsSection
-                actionsSection
-                if GarminFeature.supportsStatusItems {
-                    recommendedStatusesSection
-                    statusSection
-                }
+                overviewSectionsSection
+                customSectionsSection
             }
 
             #if DEBUG
@@ -37,7 +33,7 @@ struct GarminConfigurationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if isGarminPaired && (!viewModel.config.actionItems.isEmpty || !viewModel.config.statusItems.isEmpty) {
+                if isGarminPaired, !viewModel.config.customSections.isEmpty {
                     EditButton()
                 }
             }
@@ -47,28 +43,16 @@ struct GarminConfigurationView: View {
             viewModel.loadConfig()
             isLoaded = true
         }
-        .sheet(isPresented: $viewModel.showAddAction) {
+        .sheet(isPresented: $viewModel.showAddItem) {
             MagicItemAddView(
                 context: .garmin,
                 initialItemType: .entities,
-                visiblePickerOptions: [.entities]
+                visiblePickerOptions: [.entities],
+                garminRawDomainFilters: GarminSupportedDomains.overviewDomainRawValues,
+                showsConfirmationToggle: true
             ) { item in
                 guard let item else { return }
-                viewModel.addAction(item)
-            }
-        }
-        .sheet(isPresented: $viewModel.showAddStatus) {
-            if GarminFeature.supportsStatusItems {
-                MagicItemAddView(
-                    context: .garmin,
-                    initialItemType: .entities,
-                    visiblePickerOptions: [.entities],
-                    garminRawDomainFilters: Array(GarminSupportedDomains.statusDomainRawValues),
-                    showsConfirmationToggle: false
-                ) { item in
-                    guard let item else { return }
-                    viewModel.addStatus(item)
-                }
+                viewModel.addItem(item, to: viewModel.targetCustomSectionId)
             }
         }
         .alert(viewModel.errorMessage ?? "Garmin error", isPresented: $viewModel.showError) {
@@ -84,13 +68,13 @@ struct GarminConfigurationView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the Garmin watch pairing from Home Assistant. Your actions and statuses will stay configured.")
+            Text("This removes the Garmin watch pairing from Home Assistant. Your custom sections will stay configured.")
         }
     }
 
     private var noServerSection: some View {
         Section {
-            Text("Add a Home Assistant server before choosing Garmin actions and statuses.")
+            Text("Add a Home Assistant server before choosing Garmin sections.")
                 .foregroundStyle(.secondary)
             NavigationLink("Servers") {
                 SettingsServersView()
@@ -100,14 +84,13 @@ struct GarminConfigurationView: View {
 
     private var serverSection: some View {
         Section("Home Assistant") {
-            Picker("Server", selection: $viewModel.config.selectedServerId) {
+            Picker("Server", selection: Binding(
+                get: { viewModel.config.selectedServerId },
+                set: { viewModel.setSelectedServerId($0) }
+            )) {
                 ForEach(viewModel.servers, id: \.identifier.rawValue) { server in
                     Text(server.info.name).tag(Optional(server.identifier.rawValue))
                 }
-            }
-            .onChange(of: viewModel.config.selectedServerId) { _ in
-                viewModel.save()
-                viewModel.refreshDiscovery()
             }
         }
     }
@@ -154,94 +137,62 @@ struct GarminConfigurationView: View {
         }
     }
 
-    private var actionsSection: some View {
-        Section("Actions") {
-            ForEach(viewModel.config.actionItems, id: \.serverUniqueId) { item in
+    private var overviewSectionsSection: some View {
+        Section {
+            Toggle(
+                "Areas",
+                isOn: Binding(
+                    get: { viewModel.config.areasSectionEnabled },
+                    set: { viewModel.setAreasSectionEnabled($0) }
+                )
+            )
+            Toggle(
+                "Summaries",
+                isOn: Binding(
+                    get: { viewModel.config.summariesSectionEnabled },
+                    set: { viewModel.setSummariesSectionEnabled($0) }
+                )
+            )
+        } header: {
+            Text("Overview sections")
+        } footer: {
+            Text("Built-in Home Assistant sections are shown on Garmin when data is available.")
+        }
+    }
+
+    private var customSectionsSection: some View {
+        Section {
+            ForEach(viewModel.config.customSections) { section in
                 NavigationLink {
-                    MagicItemCustomizationView(mode: .edit, context: .garmin, item: item) { updatedItem in
-                        viewModel.updateAction(updatedItem)
-                    }
+                    GarminCustomSectionDetailView(viewModel: viewModel, sectionId: section.id)
                 } label: {
-                    magicItemRow(item)
+                    HStack {
+                        Text(section.title)
+                        Spacer()
+                        Text("\(section.items.count)")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .onDelete { offsets in
-                viewModel.deleteAction(at: offsets)
+                viewModel.deleteCustomSection(at: offsets)
             }
             .onMove { source, destination in
-                viewModel.moveAction(from: source, to: destination)
+                viewModel.moveCustomSection(from: source, to: destination)
             }
+
             Button {
-                viewModel.showAddAction = true
+                viewModel.addCustomSection()
             } label: {
-                Label("Add action", systemSymbol: .plus)
+                Label("Add section", systemSymbol: .plus)
             }
-        }
-    }
+            .disabled(viewModel.config.customSections.count >= GarminConfig.maxCustomSections)
 
-    @ViewBuilder
-    private var recommendedActionsSection: some View {
-        let candidates = viewModel.discoveryResult.recommendedActions.filter {
-            !viewModel.isActionSelected($0)
-        }
-        if !candidates.isEmpty {
-            Section("Recommended actions") {
-                ForEach(candidates) { candidate in
-                    Button {
-                        viewModel.addRecommendedAction(candidate)
-                    } label: {
-                        candidateRow(candidate)
-                    }
-                }
-            }
-        }
-    }
-
-    private var statusSection: some View {
-        Section("Statuses") {
-            ForEach(viewModel.config.statusItems, id: \.serverUniqueId) { item in
-                NavigationLink {
-                    MagicItemCustomizationView(
-                        mode: .edit,
-                        context: .garmin,
-                        item: item,
-                        showsConfirmationToggle: false
-                    ) { updatedItem in
-                        viewModel.updateStatus(updatedItem)
-                    }
-                } label: {
-                    magicItemRow(item)
-                }
-            }
-            .onDelete { offsets in
-                viewModel.deleteStatus(at: offsets)
-            }
-            .onMove { source, destination in
-                viewModel.moveStatus(from: source, to: destination)
-            }
-            Button {
-                viewModel.showAddStatus = true
-            } label: {
-                Label("Add status", systemSymbol: .plus)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var recommendedStatusesSection: some View {
-        let candidates = viewModel.discoveryResult.recommendedStatuses.filter {
-            !viewModel.isStatusSelected($0)
-        }
-        if !candidates.isEmpty {
-            Section("Recommended statuses") {
-                ForEach(candidates) { candidate in
-                    Button {
-                        viewModel.addRecommendedStatus(candidate)
-                    } label: {
-                        candidateRow(candidate)
-                    }
-                }
-            }
+            Text("\(viewModel.config.customSections.count)/\(GarminConfig.maxCustomSections) sections.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Custom sections")
         }
     }
 
@@ -269,47 +220,6 @@ struct GarminConfigurationView: View {
         }
     }
 
-    private func magicItemRow(_ item: MagicItem) -> some View {
-        let info = viewModel.magicItemInfo(for: item) ?? .init(
-            id: item.id,
-            name: item.displayText ?? item.id,
-            iconName: ""
-        )
-        return HStack {
-            Text(item.name(info: info))
-            Spacer()
-            Text(item.domain?.rawValue ?? item.type.rawValue)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func candidateRow(_ candidate: GarminEntityCandidate) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(candidate.name)
-                    .foregroundStyle(.primary)
-                Text(candidateDetail(candidate))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: "plus.circle")
-                .foregroundStyle(Color.accentColor)
-        }
-    }
-
-    private func candidateDetail(_ candidate: GarminEntityCandidate) -> String {
-        var parts = [candidate.domain]
-        if let areaName = candidate.areaName {
-            parts.append(areaName)
-        }
-        if candidate.requiresConfirmation {
-            parts.append("Confirmation")
-        }
-        return parts.joined(separator: " - ")
-    }
-
     private var isGarminPaired: Bool {
         viewModel.config.deviceIdentifier != nil
     }
@@ -321,9 +231,11 @@ struct GarminConfigurationView: View {
 
     private var pairingActionTitle: String {
         switch viewModel.connectionState {
-        case .selectingDevice, .waitingForWatch:
-            return "Pairing..."
-        case .notConfigured, .sdkUnavailable, .appUnavailable, .deviceUnavailable, .ready:
+        case .selectingDevice:
+            return "Selecting Garmin Watch..."
+        case let .waitingForWatch(deviceName):
+            return "Waiting for \(deviceName ?? "Garmin Watch")"
+        default:
             return "Pair Garmin Watch"
         }
     }
@@ -332,12 +244,128 @@ struct GarminConfigurationView: View {
         switch viewModel.connectionState {
         case .selectingDevice, .waitingForWatch:
             return true
-        case .notConfigured, .sdkUnavailable, .appUnavailable, .deviceUnavailable, .ready:
+        default:
             return false
         }
     }
 }
 
-#Preview {
-    GarminConfigurationView()
+private struct GarminCustomSectionDetailView: View {
+    @ObservedObject var viewModel: GarminConfigurationViewModel
+    let sectionId: String
+    @State private var draftTitle = ""
+
+    var body: some View {
+        List {
+            titleSection
+            itemsSection
+        }
+        .navigationTitle(section?.title ?? "Section")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if !(section?.items.isEmpty ?? true) {
+                    EditButton()
+                }
+            }
+        }
+        .onAppear {
+            draftTitle = section?.title ?? ""
+        }
+        .onDisappear {
+            commitTitle()
+        }
+    }
+
+    private var section: GarminCustomSection? {
+        viewModel.customSection(sectionId: sectionId)
+    }
+
+    private var titleSection: some View {
+        Section("Section") {
+            TextField(
+                "Name",
+                text: $draftTitle
+            )
+            .onSubmit(commitTitle)
+        }
+    }
+
+    private var itemsSection: some View {
+        Section {
+            ForEach(section?.items ?? []) { customItem in
+                NavigationLink {
+                    MagicItemCustomizationView(
+                        mode: .edit,
+                        context: .garmin,
+                        item: customItem.item,
+                        showsConfirmationToggle: GarminSupportedDomains.supportsAction(customItem.item)
+                    ) { updatedItem in
+                        viewModel.updateCustomItem(
+                            sectionId: sectionId,
+                            itemId: customItem.id,
+                            updatedItem: updatedItem
+                        )
+                    }
+                } label: {
+                    customItemRow(customItem)
+                }
+            }
+            .onDelete { offsets in
+                viewModel.deleteCustomItem(sectionId: sectionId, at: offsets)
+            }
+            .onMove { source, destination in
+                viewModel.moveCustomItem(sectionId: sectionId, from: source, to: destination)
+            }
+
+            Button {
+                viewModel.beginAddingItem(to: sectionId)
+            } label: {
+                Label("Add item", systemSymbol: .plus)
+            }
+            .disabled((section?.items.count ?? 0) >= GarminConfig.maxSectionItems)
+
+            Text("\(section?.items.count ?? 0)/\(GarminConfig.maxSectionItems) items.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Items")
+        }
+    }
+
+    private func customItemRow(_ customItem: GarminCustomSectionItem) -> some View {
+        let item = customItem.item
+        let info = viewModel.magicItemInfo(for: item) ?? .init(
+            id: item.id,
+            name: item.displayText ?? item.id,
+            iconName: ""
+        )
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name(info: info))
+                Text(capabilityText(for: item))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(item.domain?.rawValue ?? item.type.rawValue)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func capabilityText(for item: MagicItem) -> String {
+        let capability = GarminConfig.capability(for: item)
+        if capability == (GarminConfig.valueCapability | GarminConfig.actionCapability) {
+            return "Value and action"
+        } else if capability & GarminConfig.actionCapability != 0 {
+            return "Action"
+        } else {
+            return "Value"
+        }
+    }
+
+    private func commitTitle() {
+        viewModel.updateCustomSectionTitle(sectionId: sectionId, title: draftTitle)
+    }
 }

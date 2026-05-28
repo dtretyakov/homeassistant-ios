@@ -59,11 +59,13 @@ struct GarminEntityDiscoveryServiceTests {
 
         let lock = try #require(result.searchableCandidates.first { $0.entityId == "lock.front_door" })
         let cover = try #require(result.searchableCandidates.first { $0.entityId == "cover.garage" })
-        #expect(!lock.supportsAction)
+        #expect(lock.supportsAction)
         #expect(lock.supportsStatus)
         #expect(cover.supportsAction)
         #expect(cover.supportsStatus)
+        #expect(lock.requiresConfirmation)
         #expect(!cover.requiresConfirmation)
+        #expect(lock.magicItem().customization?.requiresConfirmation == true)
         #expect(cover.magicItem().customization?.requiresConfirmation == false)
     }
 

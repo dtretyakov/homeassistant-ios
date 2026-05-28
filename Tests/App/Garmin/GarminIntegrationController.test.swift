@@ -58,26 +58,8 @@ private final class ControllerGarminClient: GarminConnectIQClient {
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {}
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
-        completion(.success(()))
-    }
-
-    func sendStatusSnapshot(
-        _ snapshot: GarminStatusSnapshot,
-        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
-    ) {
-        completion(.success(()))
-    }
-
     func sendActionResult(
         _ result: GarminCommandResult,
-        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
-    ) {
-        completion(.success(()))
-    }
-
-    func sendConnectionStatus(
-        _ status: GarminConnectionStatus,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         completion(.success(()))

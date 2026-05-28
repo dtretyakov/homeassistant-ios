@@ -29,7 +29,7 @@ final class GarminStatusSnapshotService {
     ) async throws -> GarminStatusSnapshot {
         let updatedAt = dateProvider().timeIntervalSince1970
         var values: [GarminStatusValue] = []
-        let statusItems = config.statusItems.prefix(GarminConfig.maxStatusItems)
+        let statusItems = Self.statusItems(for: config)
 
         for item in statusItems where GarminSupportedDomains.supportsStatus(item) {
             let info = itemInfo(item)
@@ -60,21 +60,21 @@ final class GarminStatusSnapshotService {
             } catch {
                 Current.Log.error("Failed to cache Garmin status snapshot: \(error)")
             }
-            GarminDiagnostics.record(.statusSnapshot, status: .success, metadata: [
+            GarminDiagnostics.record(.valueSnapshot, status: .success, metadata: [
                 "cache_status": "fresh",
                 "status_count": snapshot.statuses.count,
             ])
             return .success(snapshot)
         } catch {
             if let cachedSnapshot = try? GarminStatusSnapshotCache.cachedSnapshot(statusIds: statusIds) {
-                GarminDiagnostics.record(.statusSnapshot, status: .success, metadata: [
+                GarminDiagnostics.record(.valueSnapshot, status: .success, metadata: [
                     "cache_status": "fallback",
                     "status_count": cachedSnapshot.statuses.count,
                 ])
                 return .success(cachedSnapshot)
             }
             let integrationError = (error as? GarminIntegrationError) ?? .homeAssistantUnavailable
-            GarminDiagnostics.record(.statusSnapshot, status: .failed, metadata: [
+            GarminDiagnostics.record(.valueSnapshot, status: .failed, metadata: [
                 "cache_status": "unavailable",
                 "error_code": integrationError.rawValue,
                 "status_count": statusIds.count,
@@ -84,10 +84,21 @@ final class GarminStatusSnapshotService {
     }
 
     static func statusIds(for config: GarminConfig) -> [String] {
-        config.statusItems
-            .prefix(GarminConfig.maxStatusItems)
+        statusItems(for: config)
             .filter { GarminSupportedDomains.supportsStatus($0) }
-            .map { GarminConfig.opaqueStatusId(for: $0) }
+            .map { GarminConfig.opaqueItemId(for: $0) }
+    }
+
+    private static func statusItems(for config: GarminConfig) -> [MagicItem] {
+        var seen = Set<String>()
+        return Array((GarminOverviewVisibleEntityRegistry.shared.visibleStatusItems(limit: GarminConfig.maxSectionItems) + config.customStatusItems)
+            .filter { GarminSupportedDomains.supportsStatus($0) }
+            .filter { item in
+                guard !seen.contains(item.serverUniqueId) else { return false }
+                seen.insert(item.serverUniqueId)
+                return true
+            }
+            .prefix(GarminConfig.maxStatusItems))
     }
 
     private static func defaultStateProvider(
@@ -104,7 +115,7 @@ final class GarminStatusSnapshotService {
         iconName: String?
     ) -> GarminStatusValue {
         GarminStatusValue(
-            id: GarminConfig.opaqueStatusId(for: item),
+            id: GarminConfig.opaqueItemId(for: item),
             label: label,
             value: value,
             iconName: iconName

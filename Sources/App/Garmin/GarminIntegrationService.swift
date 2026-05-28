@@ -1,5 +1,6 @@
 import Alamofire
 import Foundation
+import HAKit
 import PromiseKit
 import Shared
 
@@ -10,9 +11,11 @@ final class GarminIntegrationService {
         GarminConfig,
         @escaping (Swift.Result<GarminStatusSnapshot, GarminIntegrationError>) -> Void
     ) -> Void
+    typealias OverviewSourceProvider = () -> GarminHomeOverviewSource
 
     private let client: GarminConnectIQClient
     private let actionExecutor: ActionExecutor
+    private let overviewSourceProvider: OverviewSourceProvider
     private var currentConfigProvider: (() -> GarminConfig?)?
     private var currentItemInfoProvider: ItemInfoProvider?
     private var currentStatusSnapshotProvider: StatusSnapshotProvider?
@@ -21,10 +24,12 @@ final class GarminIntegrationService {
 
     init(
         client: GarminConnectIQClient,
-        actionExecutor: @escaping ActionExecutor = GarminActionExecutor.execute
+        actionExecutor: @escaping ActionExecutor = GarminActionExecutor.execute,
+        overviewSourceProvider: @escaping OverviewSourceProvider = { GarminHomeOverviewSource() }
     ) {
         self.client = client
         self.actionExecutor = actionExecutor
+        self.overviewSourceProvider = overviewSourceProvider
     }
 
     func setup(
@@ -42,14 +47,15 @@ final class GarminIntegrationService {
 
     func sync(
         config: GarminConfig,
-        itemInfo: (MagicItem) -> MagicItem.Info?,
+        itemInfo: @escaping (MagicItem) -> MagicItem.Info?,
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
+        _ = itemInfo
         guard client.state.isReady else {
             completion(.failure(error(for: client.state)))
             return
         }
-        client.sendProfile(GarminProfile(config: config, itemInfo: itemInfo), completion: completion)
+        completion(.success(()))
     }
 
     func requestDeviceSelection(force: Bool) {
@@ -62,14 +68,9 @@ final class GarminIntegrationService {
     }
 
     func handle(_ message: GarminInboundMessage) {
-        if message.type == .ping {
-            handlePing(message) { _ in }
-            return
-        }
-
-        guard let config = currentConfigProvider?() else {
+        guard let config = currentConfig() else {
             GarminDiagnostics.recordInbound(message, status: .failed, error: .missingConfig)
-            send(.init(correlationId: message.correlationId, state: .failed, error: .missingConfig)) { _ in }
+            send(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .missingConfig)) { _ in }
             return
         }
         handle(message, config: config) { _ in }
@@ -93,93 +94,130 @@ final class GarminIntegrationService {
 
         guard message.version == GarminProtocolVersion.current else {
             let result = GarminCommandResult(
+                id: message.id,
                 correlationId: message.correlationId,
                 state: .failed,
                 error: .unsupportedProtocol
             )
-            if message.type == .ping {
-                sendConnectionStatus(
-                    .init(correlationId: message.correlationId, state: .failed, error: .unsupportedProtocol),
-                    completion: recordingCompletion
-                )
-            } else {
-                send(result, completion: recordingCompletion)
-            }
+            send(result, completion: recordingCompletion)
             return
         }
 
         switch message.type {
-        case .ping:
-            sendConnectionStatus(
-                .init(correlationId: message.correlationId, state: .success),
-                completion: recordingCompletion
-            )
-        case .requestProfile:
-            sendProfile(config: config, correlationId: message.correlationId, completion: recordingCompletion)
-        case .requestStatus:
-            sendStatusSnapshot(config: config, correlationId: message.correlationId, completion: recordingCompletion)
+        case .getSection:
+            handleGetSection(message, config: config, completion: recordingCompletion)
         case .callAction:
             handleCallAction(message, config: config, completion: recordingCompletion)
         }
     }
 
-    private func handlePing(_ message: GarminInboundMessage, completion: @escaping (GarminCommandResult) -> Void) {
-        GarminDiagnostics.recordInbound(message, status: .started)
-        let status: GarminConnectionStatus
-        if message.version == GarminProtocolVersion.current {
-            status = .init(correlationId: message.correlationId, state: .success)
-        } else {
-            status = .init(correlationId: message.correlationId, state: .failed, error: .unsupportedProtocol)
+    private func handleGetSection(
+        _ message: GarminInboundMessage,
+        config: GarminConfig,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        guard client.state.isReady else {
+            completion(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: error(for: client.state)))
+            return
         }
-        sendConnectionStatus(status) { result in
-            GarminDiagnostics.recordInbound(
-                message,
-                status: result.state == .success ? .success : .failed,
-                error: result.error,
-                commandState: result.state
+        guard let sectionId = message.id else {
+            send(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
+            return
+        }
+
+        let overviewSource = overviewSourceProvider()
+        let itemInfo = currentItemInfoProvider ?? { _ in nil }
+
+        do {
+            let visibleValueItems = try overviewSource.valueItems(
+                id: sectionId,
+                config: config,
+                itemInfo: itemInfo
             )
-            completion(result)
-        }
-    }
-
-    private func sendProfile(
-        config: GarminConfig,
-        correlationId: String?,
-        completion: @escaping (GarminCommandResult) -> Void
-    ) {
-        guard client.state.isReady else {
-            completion(.init(correlationId: correlationId, state: .failed, error: error(for: client.state)))
-            return
-        }
-        let profile = GarminProfile(config: config, itemInfo: currentItemInfoProvider ?? { _ in nil })
-        client.sendProfile(profile) { [weak self] result in
-            self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
-        }
-    }
-
-    private func sendStatusSnapshot(
-        config: GarminConfig,
-        correlationId: String?,
-        completion: @escaping (GarminCommandResult) -> Void
-    ) {
-        guard client.state.isReady else {
-            completion(.init(correlationId: correlationId, state: .failed, error: error(for: client.state)))
-            return
-        }
-        guard let currentStatusSnapshotProvider else {
-            send(.init(correlationId: correlationId, state: .failed, error: .unsupportedStatus), completion: completion)
+            updateVisibleItems(for: visibleValueItems)
+        } catch {
+            send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
             return
         }
 
-        currentStatusSnapshotProvider(config) { [weak self] snapshotResult in
-            switch snapshotResult {
-            case let .success(snapshot):
-                self?.client.sendStatusSnapshot(snapshot) { [weak self] result in
-                    self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
+        sectionValues(config: config) { [weak self] valuesById in
+            guard let self else { return }
+            do {
+                guard let section = try overviewSource.section(
+                    id: sectionId,
+                    config: config,
+                    itemInfo: itemInfo,
+                    valueProvider: { valuesById[$0.id] }
+                ) else {
+                    self.send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
+                    return
                 }
-            case let .failure(error):
-                self?.send(.init(correlationId: correlationId, state: .failed, error: error), completion: completion)
+                if message.etag == section.etag {
+                    self.client.sendSectionNotModified(sectionId: section.id, correlationId: message.correlationId) { [weak self] result in
+                        guard let self else { return }
+                        guard case .success = result else {
+                            self.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
+                            return
+                        }
+                        self.sendValuesIfNeeded(section.values, correlationId: message.correlationId, completion: completion)
+                    }
+                } else {
+                    self.client.sendSectionSnapshot(section, correlationId: message.correlationId) { [weak self] result in
+                        self?.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
+                    }
+                }
+            } catch {
+                self.send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
             }
+        }
+    }
+
+    private func sectionValues(
+        config: GarminConfig,
+        completion: @escaping ([String: String]) -> Void
+    ) {
+        guard let currentStatusSnapshotProvider else {
+            completion([:])
+            return
+        }
+
+        currentStatusSnapshotProvider(config) { result in
+            guard case let .success(snapshot) = result else {
+                completion([:])
+                return
+            }
+
+            var values: [String: String] = [:]
+            snapshot.statuses.forEach { status in
+                values[status.id] = status.value
+            }
+            completion(values)
+        }
+    }
+
+    private func updateVisibleItems(for items: [MagicItem]) {
+        let visibleItems = items
+            .filter(GarminSupportedDomains.supportsStatus)
+            .prefix(GarminConfig.maxSectionItems)
+        visibleItems.forEach {
+            GarminOverviewVisibleEntityRegistry.shared.register(item: $0)
+        }
+        let ids = Set(visibleItems.map { GarminConfig.opaqueItemId(for: $0) })
+        GarminOverviewVisibleEntityRegistry.shared.setVisible(ids: ids)
+        NotificationCenter.default.post(name: .garminVisibleItemsDidChange, object: nil)
+    }
+
+    private func sendValuesIfNeeded(
+        _ values: [GarminOverviewValue],
+        correlationId: String?,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        guard !values.isEmpty else {
+            completion(.init(correlationId: correlationId, state: .success))
+            return
+        }
+        client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next()) { [weak self] result in
+            self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
         }
     }
 
@@ -188,8 +226,9 @@ final class GarminIntegrationService {
         config: GarminConfig,
         completion: @escaping (GarminCommandResult) -> Void
     ) {
-        guard let actionId = message.actionId, let item = config.action(for: actionId) else {
-            completeAction(.init(correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
+        guard let itemId = message.id,
+              let item = resolveAction(itemId: itemId, config: config) else {
+            completeAction(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
             return
         }
         GarminDiagnostics.record(.actionExecution, status: .started, metadata: [
@@ -199,11 +238,11 @@ final class GarminIntegrationService {
             "command_state": GarminCommandState.pending.rawValue,
         ])
         guard GarminSupportedDomains.supportsAction(item) else {
-            completeAction(.init(correlationId: message.correlationId, state: .failed, error: .unsupportedAction), completion: completion)
+            completeAction(.init(id: itemId, correlationId: message.correlationId, state: .failed, error: .unsupportedAction), completion: completion)
             return
         }
         guard let server = Current.servers.server(forServerIdentifier: item.serverId) else {
-            completeAction(.init(correlationId: message.correlationId, state: .failed, error: .missingServer), completion: completion)
+            completeAction(.init(id: itemId, correlationId: message.correlationId, state: .failed, error: .missingServer), completion: completion)
             return
         }
 
@@ -211,11 +250,69 @@ final class GarminIntegrationService {
             let result: GarminCommandResult
             switch executionResult {
             case .success:
-                result = .init(correlationId: message.correlationId, state: .success)
+                result = .init(id: itemId, correlationId: message.correlationId, state: .success)
             case let .failure(error):
-                result = .init(correlationId: message.correlationId, state: .failed, error: error)
+                result = .init(id: itemId, correlationId: message.correlationId, state: .failed, error: error)
             }
             self?.completeAction(result, completion: completion)
+        }
+    }
+
+    private func resolveAction(itemId: String, config: GarminConfig) -> MagicItem? {
+        if let item = config.action(for: itemId), isActionUsable(item, config: config) {
+            return item
+        }
+        if let item = resolveEntityAction(itemId: itemId, config: config) {
+            return item
+        }
+        if let item = GarminOverviewActionRegistry.shared.action(for: itemId), isActionUsable(item, config: config) {
+            return item
+        }
+        _ = try? overviewSourceProvider().section(
+            id: GarminOverviewSectionID.root,
+            config: config,
+            itemInfo: currentItemInfoProvider ?? { _ in nil }
+        )
+        guard let item = GarminOverviewActionRegistry.shared.action(for: itemId),
+              isActionUsable(item, config: config) else {
+            return nil
+        }
+        return item
+    }
+
+    private func resolveEntityAction(itemId: String, config: GarminConfig) -> MagicItem? {
+        guard let selectedServerId = config.selectedServerId else { return nil }
+        let entities = (try? HAAppEntity.config()) ?? []
+        for entity in entities where entity.serverId == selectedServerId && GarminSupportedDomains.supportsAction(rawDomain: entity.domain) {
+            guard GarminConfig.opaqueEntityId(serverId: entity.serverId, entityId: entity.entityId) == itemId else { continue }
+            let item = MagicItem(
+                id: entity.entityId,
+                serverId: entity.serverId,
+                type: magicItemType(for: entity.domain),
+                displayText: entity.name
+            )
+            guard isActionUsable(item, config: config) else { return nil }
+            return item
+        }
+        return nil
+    }
+
+    private func isActionUsable(_ item: MagicItem, config: GarminConfig) -> Bool {
+        guard GarminSupportedDomains.supportsAction(item) else { return false }
+        if let selectedServerId = config.selectedServerId, item.serverId != selectedServerId {
+            return false
+        }
+        return true
+    }
+
+    private func magicItemType(for domain: String) -> MagicItem.ItemType {
+        switch Domain(rawValue: domain) {
+        case .script:
+            return .script
+        case .scene:
+            return .scene
+        default:
+            return .entity
         }
     }
 
@@ -250,20 +347,6 @@ final class GarminIntegrationService {
         }
     }
 
-    private func sendConnectionStatus(
-        _ status: GarminConnectionStatus,
-        completion: @escaping (GarminCommandResult) -> Void
-    ) {
-        client.sendConnectionStatus(status) { sendResult in
-            switch sendResult {
-            case .success:
-                completion(.init(correlationId: status.correlationId, state: status.state, error: status.error))
-            case let .failure(error):
-                completion(.init(correlationId: status.correlationId, state: .failed, error: error))
-            }
-        }
-    }
-
     private func error(for state: GarminConnectionState) -> GarminIntegrationError {
         switch state {
         case .notConfigured, .selectingDevice, .waitingForWatch, .appUnavailable, .deviceUnavailable:
@@ -273,6 +356,16 @@ final class GarminIntegrationService {
         case .ready:
             return .commandFailed
         }
+    }
+
+    private func currentConfig() -> GarminConfig? {
+        if let config = currentConfigProvider?() {
+            return config
+        }
+
+        var config = GarminConfig()
+        config.selectedServerId = Current.servers.all.first?.identifier.rawValue
+        return config
     }
 }
 
@@ -325,7 +418,16 @@ private enum GarminActionExecutor {
                 completion(.failure(.entityRemoved))
                 return
             }
-            request = api.executeActionForDomainType(domain: domain, entityId: item.id, state: "")
+            if domain == .lock {
+                request = api.connection.send(HATypedRequest<[HAEntity]>.fetchStates()).promise.then { states -> Promise<Void> in
+                    guard let state = states.first(where: { $0.entityId == item.id })?.state else {
+                        return .value
+                    }
+                    return api.executeActionForDomainType(domain: domain, entityId: item.id, state: state)
+                }
+            } else {
+                request = api.executeActionForDomainType(domain: domain, entityId: item.id, state: "")
+            }
         case .action, .folder, .assistPipeline, .assistPrompt:
             request = nil
         }

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum GarminProtocolVersion {
-    public static let current = 1
+    public static let current = 2
 }
 
 public enum GarminPayloadLimits {
@@ -9,193 +9,149 @@ public enum GarminPayloadLimits {
     public static let outboundMessageBytes = 4096
 }
 
+final class GarminValuesRevisionCounter {
+    static let shared = GarminValuesRevisionCounter()
+
+    private let lock = NSLock()
+    private var revision = 0
+
+    func next() -> Int {
+        lock.lock()
+        revision += 1
+        let value = revision
+        lock.unlock()
+        return value
+    }
+}
+
 public enum GarminInboundMessageType: String, Codable, Equatable {
-    case ping
-    case requestProfile = "request_profile"
-    case callAction = "call_action"
-    case requestStatus = "request_status"
+    case getSection = "get"
+    case callAction = "call"
 }
 
 public enum GarminOutboundMessageType: String, Codable, Equatable {
-    case profileSync = "profile_sync"
-    case statusSnapshot = "status_snapshot"
-    case actionResult = "action_result"
-    case connectionStatus = "connection_status"
+    case sectionSnapshot = "section"
+    case sectionNotModified = "same"
+    case valuesDelta = "values"
+    case actionResult = "result"
 }
 
 public struct GarminInboundMessage: Codable, Equatable {
     public let version: Int
     public let type: GarminInboundMessageType
-    public let actionId: String?
-    public let statusId: String?
+    public let id: String?
+    public let etag: String?
     public let correlationId: String?
 
     public init(
         version: Int = GarminProtocolVersion.current,
         type: GarminInboundMessageType,
-        actionId: String? = nil,
-        statusId: String? = nil,
+        id: String? = nil,
+        etag: String? = nil,
         correlationId: String? = nil
     ) {
         self.version = version
         self.type = type
-        self.actionId = actionId
-        self.statusId = statusId
+        self.id = id
+        self.etag = etag
         self.correlationId = correlationId
     }
 
     enum CodingKeys: String, CodingKey {
-        case version
-        case type
-        case actionId = "action_id"
-        case statusId = "status_id"
-        case correlationId = "id"
+        case version = "v"
+        case type = "t"
+        case id
+        case etag = "e"
+        case correlationId = "cid"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? GarminProtocolVersion.current
         type = try container.decode(GarminInboundMessageType.self, forKey: .type)
-        actionId = try container.decodeIfPresent(String.self, forKey: .actionId)
-        statusId = try container.decodeIfPresent(String.self, forKey: .statusId)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        etag = try container.decodeIfPresent(String.self, forKey: .etag)
         correlationId = try container.decodeIfPresent(String.self, forKey: .correlationId)
     }
 }
 
-public struct GarminOutboundMessage: Codable, Equatable {
+public struct GarminOutboundMessage: Encodable, Equatable {
     public let version: Int
     public let type: GarminOutboundMessageType
-    public let profile: GarminProfile?
-    public let statusSnapshot: GarminStatusSnapshot?
+    public let id: String?
+    public let correlationId: String?
+    public let section: GarminOverviewSection?
+    public let values: [GarminOverviewValue]?
+    public let valuesRevision: Int?
     public let actionResult: GarminCommandResult?
-    public let connectionStatus: GarminConnectionStatus?
 
     public init(
         version: Int = GarminProtocolVersion.current,
         type: GarminOutboundMessageType,
-        profile: GarminProfile? = nil,
-        statusSnapshot: GarminStatusSnapshot? = nil,
-        actionResult: GarminCommandResult? = nil,
-        connectionStatus: GarminConnectionStatus? = nil
+        id: String? = nil,
+        correlationId: String? = nil,
+        section: GarminOverviewSection? = nil,
+        values: [GarminOverviewValue]? = nil,
+        valuesRevision: Int? = nil,
+        actionResult: GarminCommandResult? = nil
     ) {
         self.version = version
         self.type = type
-        self.profile = profile
-        self.statusSnapshot = statusSnapshot
-        self.actionResult = actionResult
-        self.connectionStatus = connectionStatus
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case version
-        case type
-        case profile
-        case statusSnapshot = "status_snapshot"
-        case actionResult = "action_result"
-        case connectionStatus = "connection_status"
-    }
-}
-
-public struct GarminConnectionStatus: Codable, Equatable {
-    public let correlationId: String?
-    public let state: GarminCommandState
-    public let error: GarminIntegrationError?
-    public let maxPayloadBytes: Int
-
-    public init(
-        correlationId: String?,
-        state: GarminCommandState,
-        error: GarminIntegrationError? = nil,
-        maxPayloadBytes: Int = GarminPayloadLimits.outboundMessageBytes
-    ) {
+        self.id = id
         self.correlationId = correlationId
-        self.state = state
-        self.error = error
-        self.maxPayloadBytes = maxPayloadBytes
+        self.section = section
+        self.values = values
+        self.valuesRevision = valuesRevision
+        self.actionResult = actionResult
     }
 
     enum CodingKeys: String, CodingKey {
-        case correlationId = "id"
+        case version = "v"
+        case type = "t"
+        case id
+        case correlationId = "cid"
+        case section
+        case values = "vals"
+        case valuesRevision = "rev"
+        case actionResult
         case state
         case error
-        case maxPayloadBytes = "max_payload_bytes"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        correlationId = try container.decodeIfPresent(String.self, forKey: .correlationId)
-        let encodedState = try container.decode(String.self, forKey: .state)
-        switch encodedState {
-        case "ok":
-            state = .success
-        case "error":
-            state = .failed
-        default:
-            guard let commandState = GarminCommandState(rawValue: encodedState) else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .state,
-                    in: container,
-                    debugDescription: "Unknown Garmin command state \(encodedState)"
-                )
-            }
-            state = commandState
-        }
-        if let encodedError = try container.decodeIfPresent(String.self, forKey: .error) {
-            switch encodedError {
-            case "unavailable":
-                error = .watchUnavailable
-            default:
-                error = GarminIntegrationError(rawValue: encodedError)
-            }
-        } else {
-            error = nil
-        }
-        maxPayloadBytes = try container.decodeIfPresent(Int.self, forKey: .maxPayloadBytes)
-            ?? GarminPayloadLimits.outboundMessageBytes
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(id, forKey: .id)
         try container.encodeIfPresent(correlationId, forKey: .correlationId)
-        switch state {
-        case .success:
-            try container.encode("ok", forKey: .state)
-        case .failed:
-            try container.encode("error", forKey: .state)
-        case .pending:
-            try container.encode("pending", forKey: .state)
-        }
-        try container.encodeIfPresent(encodedConnectionError(error), forKey: .error)
-        if maxPayloadBytes != GarminPayloadLimits.outboundMessageBytes {
-            try container.encode(maxPayloadBytes, forKey: .maxPayloadBytes)
-        }
-    }
-
-    private func encodedConnectionError(_ error: GarminIntegrationError?) -> String? {
-        switch error {
-        case .sdkUnavailable, .watchUnavailable:
-            return "unavailable"
-        case let .some(error):
-            return error.rawValue
-        case .none:
-            return nil
+        try container.encodeIfPresent(section, forKey: .section)
+        try container.encodeIfPresent(values, forKey: .values)
+        try container.encodeIfPresent(valuesRevision, forKey: .valuesRevision)
+        if let actionResult {
+            try container.encodeIfPresent(actionResult.id, forKey: .id)
+            try container.encodeIfPresent(actionResult.correlationId, forKey: .correlationId)
+            try container.encode(actionResult.state, forKey: .state)
+            try container.encodeIfPresent(actionResult.error, forKey: .error)
         }
     }
 }
 
 public struct GarminCommandResult: Codable, Equatable {
+    public let id: String?
     public let correlationId: String?
     public let state: GarminCommandState
     public let error: GarminIntegrationError?
 
-    public init(correlationId: String?, state: GarminCommandState, error: GarminIntegrationError? = nil) {
+    public init(id: String? = nil, correlationId: String?, state: GarminCommandState, error: GarminIntegrationError? = nil) {
+        self.id = id
         self.correlationId = correlationId
         self.state = state
         self.error = error
     }
 
     enum CodingKeys: String, CodingKey {
-        case correlationId = "id"
+        case id
+        case correlationId = "cid"
         case state
         case error
     }
@@ -225,13 +181,6 @@ public enum GarminIntegrationError: String, Codable, Error, Equatable {
 
 public enum GarminPayloadCodec {
     public static func encodeOutboundDictionary(_ message: GarminOutboundMessage) throws -> [String: Any] {
-        if message.type == .connectionStatus, let status = message.connectionStatus {
-            let data = try JSONEncoder().encode(status)
-            var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-            object["type"] = message.type.rawValue
-            return object
-        }
-
         let data = try JSONEncoder().encode(message)
         let object = try JSONSerialization.jsonObject(with: data)
         return object as? [String: Any] ?? [:]
@@ -243,11 +192,6 @@ public enum GarminPayloadCodec {
     }
 
     public static func encodedByteCount<T: Encodable>(_ value: T) throws -> Int {
-        if let message = value as? GarminOutboundMessage, message.type == .connectionStatus {
-            let object = try encodeOutboundDictionary(message)
-            return try JSONSerialization.data(withJSONObject: object).count
-        }
-
         return try JSONEncoder().encode(value).count
     }
 }

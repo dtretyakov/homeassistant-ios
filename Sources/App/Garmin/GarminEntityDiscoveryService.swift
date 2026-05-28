@@ -65,15 +65,11 @@ struct GarminEntityCandidate: Identifiable, Equatable {
 
 struct GarminEntityDiscoveryResult: Equatable {
     static let empty = GarminEntityDiscoveryResult(
-        recommendedActions: [],
-        recommendedStatuses: [],
         actionsByDomain: [:],
         statusesByDomain: [:],
         searchableCandidates: []
     )
 
-    let recommendedActions: [GarminEntityCandidate]
-    let recommendedStatuses: [GarminEntityCandidate]
     let actionsByDomain: [String: [GarminEntityCandidate]]
     let statusesByDomain: [String: [GarminEntityCandidate]]
     let searchableCandidates: [GarminEntityCandidate]
@@ -164,8 +160,6 @@ final class GarminEntityDiscoveryService {
         let statusCandidates = candidates.filter { $0.supportsStatus }
 
         return GarminEntityDiscoveryResult(
-            recommendedActions: Array(actionCandidates.prefix(8)),
-            recommendedStatuses: Array(statusCandidates.prefix(5)),
             actionsByDomain: groupedByDomain(actionCandidates),
             statusesByDomain: groupedByDomain(statusCandidates),
             searchableCandidates: candidates.sorted(by: sortByName)
@@ -197,9 +191,24 @@ final class GarminEntityDiscoveryService {
             icon: entity.icon,
             areaName: areaName,
             candidateKind: kind,
-            requiresConfirmation: false,
+            requiresConfirmation: GarminActionConfirmationPolicy.defaultRequiresConfirmation(for: MagicItem(
+                id: entity.entityId,
+                serverId: entity.serverId,
+                type: magicItemType(for: entity.domain)
+            )),
             score: score(entity: entity, supportsAction: supportsAction, supportsStatus: supportsStatus)
         )
+    }
+
+    private func magicItemType(for domain: String) -> MagicItem.ItemType {
+        switch domain {
+        case Domain.script.rawValue:
+            return .script
+        case Domain.scene.rawValue:
+            return .scene
+        default:
+            return .entity
+        }
     }
 
     private func areaNameMap(areas: [GarminEntityAreaInfo]) -> [String: String] {

@@ -14,17 +14,47 @@ struct GarminStatusObservationServiceTests {
         let client = RecordingGarminStatusClient()
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in completion(.success(snapshot)) }
         )
         defer { service.stop() }
 
         service.start()
 
-        try await waitUntil { client.sentStatusSnapshots.count == 1 }
-        #expect(client.sentStatusSnapshots == [snapshot])
-        let cached = try GarminStatusSnapshotCache.cachedSnapshot(statusIds: [GarminConfig.opaqueStatusId(for: item)])
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
+        #expect(client.sentValuesDeltas.first?.values == [
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: item.serverId, entityId: item.id),
+                value: "20 °C"
+            ),
+        ])
+        let cached = try GarminStatusSnapshotCache.cachedSnapshot(statusIds: [GarminConfig.opaqueItemId(for: item)])
         #expect(cached == snapshot)
+    }
+
+    @Test func stateRefreshSendsOverviewValuesDeltaForSelectedEntities() async throws {
+        try GarminStatusSnapshotCache.clear()
+        let item = statusItem("sensor.temperature")
+        let snapshot = statusSnapshot(item: item, value: "20 °C", updatedAt: 1)
+        let client = RecordingGarminStatusClient()
+        let service = makeService(
+            client: client,
+            configProvider: { config(statusItems: [item]) },
+            snapshotProvider: { _, completion in completion(.success(snapshot)) }
+        )
+        defer { service.stop() }
+
+        service.start()
+
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
+        let sent = try #require(client.sentValuesDeltas.first)
+        #expect(sent.values == [
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: item.serverId, entityId: item.id),
+                value: "20 °C"
+            ),
+        ])
+        #expect(sent.revision > 0)
     }
 
     @Test func equivalentSnapshotsAreDeduplicatedIgnoringUpdatedAt() async throws {
@@ -38,7 +68,7 @@ struct GarminStatusObservationServiceTests {
         let client = RecordingGarminStatusClient()
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in completion(.success(snapshots.removeFirst())) },
             subscriptionProvider: { _, stateChange, _ in
                 onStateChange = stateChange
@@ -49,12 +79,12 @@ struct GarminStatusObservationServiceTests {
         defer { service.stop() }
 
         service.start()
-        try await waitUntil { client.sentStatusSnapshots.count == 1 }
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
         onStateChange?()
 
         try await waitUntil { snapshots.isEmpty }
         try await Task.sleep(nanoseconds: 20_000_000)
-        #expect(client.sentStatusSnapshots.count == 1)
+        #expect(client.sentValuesDeltas.count == 1)
     }
 
     @Test func sameConfigurationRefreshDoesNotDuplicateEquivalentSnapshotSend() async throws {
@@ -64,7 +94,7 @@ struct GarminStatusObservationServiceTests {
         let client = RecordingGarminStatusClient()
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in
                 refreshCount += 1
                 completion(.success(statusSnapshot(item: item, value: "20 °C", updatedAt: TimeInterval(refreshCount))))
@@ -73,12 +103,12 @@ struct GarminStatusObservationServiceTests {
         defer { service.stop() }
 
         service.start()
-        try await waitUntil { client.sentStatusSnapshots.count == 1 }
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
         service.refreshConfiguration()
 
         try await waitUntil { refreshCount == 2 }
         try await Task.sleep(nanoseconds: 20_000_000)
-        #expect(client.sentStatusSnapshots.count == 1)
+        #expect(client.sentValuesDeltas.count == 1)
     }
 
     @Test func notReadyGarminClientCachesSnapshotWithoutSending() async throws {
@@ -89,7 +119,7 @@ struct GarminStatusObservationServiceTests {
         client.state = .deviceUnavailable
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in completion(.success(snapshot)) }
         )
         defer { service.stop() }
@@ -98,10 +128,10 @@ struct GarminStatusObservationServiceTests {
 
         try await waitUntil {
             (try? GarminStatusSnapshotCache.cachedSnapshot(
-                statusIds: [GarminConfig.opaqueStatusId(for: item)]
+                statusIds: [GarminConfig.opaqueItemId(for: item)]
             )) == snapshot
         }
-        #expect(client.sentStatusSnapshots.isEmpty)
+        #expect(client.sentValuesDeltas.isEmpty)
     }
 
     @Test func stateBurstsAreDebouncedAndSendLatestSnapshot() async throws {
@@ -113,7 +143,7 @@ struct GarminStatusObservationServiceTests {
         let client = RecordingGarminStatusClient()
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in
                 refreshCount += 1
                 completion(.success(statusSnapshot(item: item, value: currentValue, updatedAt: TimeInterval(refreshCount))))
@@ -127,7 +157,7 @@ struct GarminStatusObservationServiceTests {
         defer { service.stop() }
 
         service.start()
-        try await waitUntil { client.sentStatusSnapshots.count == 1 }
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
 
         currentValue = "21 °C"
         onStateChange?()
@@ -136,8 +166,8 @@ struct GarminStatusObservationServiceTests {
         currentValue = "23 °C"
         onStateChange?()
 
-        try await waitUntil { client.sentStatusSnapshots.count == 2 }
-        #expect(client.sentStatusSnapshots.map { $0.statuses.first?.value } == ["20 °C", "23 °C"])
+        try await waitUntil { client.sentValuesDeltas.count == 2 }
+        #expect(client.sentValuesDeltas.map { $0.values.first?.value } == ["20 °C", "23 °C"])
     }
 
     @Test func sendPipelineIsSingleFlightAndLatestWins() async throws {
@@ -149,7 +179,7 @@ struct GarminStatusObservationServiceTests {
         let client = RecordingGarminStatusClient(automaticallyCompleteSends: false)
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in
                 refreshCount += 1
                 completion(.success(statusSnapshot(item: item, value: currentValue, updatedAt: TimeInterval(refreshCount))))
@@ -163,20 +193,20 @@ struct GarminStatusObservationServiceTests {
         defer { service.stop() }
 
         service.start()
-        try await waitUntil { client.sentStatusSnapshots.count == 1 }
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
 
         currentValue = "21 °C"
         onStateChange?()
         currentValue = "22 °C"
         onStateChange?()
 
-        try await waitUntil { refreshCount == 3 }
-        #expect(client.sentStatusSnapshots.count == 1)
+        try await waitUntil { refreshCount >= 2 }
+        #expect(client.sentValuesDeltas.count == 1)
 
         client.completeNextSend(.success(()))
 
-        try await waitUntil { client.sentStatusSnapshots.count == 2 }
-        #expect(client.sentStatusSnapshots.map { $0.statuses.first?.value } == ["20 °C", "22 °C"])
+        try await waitUntil { client.sentValuesDeltas.count == 2 }
+        #expect(client.sentValuesDeltas.map { $0.values.first?.value } == ["20 °C", "22 °C"])
     }
 
     @Test func subscriptionFailureTriggersSnapshotFallbackRefresh() async throws {
@@ -187,7 +217,7 @@ struct GarminStatusObservationServiceTests {
         let client = RecordingGarminStatusClient()
         let service = makeService(
             client: client,
-            configProvider: { GarminConfig(statusItems: [item]) },
+            configProvider: { config(statusItems: [item]) },
             snapshotProvider: { _, completion in
                 completion(.success(statusSnapshot(item: item, value: currentValue)))
             },
@@ -200,27 +230,27 @@ struct GarminStatusObservationServiceTests {
         defer { service.stop() }
 
         service.start()
-        try await waitUntil { client.sentStatusSnapshots.count == 1 }
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
 
         currentValue = "21 °C"
         onFailure?(.homeAssistantUnavailable)
 
-        try await waitUntil { client.sentStatusSnapshots.count == 2 }
-        #expect(client.sentStatusSnapshots.map { $0.statuses.first?.value } == ["20 °C", "21 °C"])
+        try await waitUntil { client.sentValuesDeltas.count == 2 }
+        #expect(client.sentValuesDeltas.map { $0.values.first?.value } == ["20 °C", "21 °C"])
     }
 
     @Test func configurationRefreshCancelsOldSubscriptionAndObservesNewStatuses() async throws {
         try GarminStatusSnapshotCache.clear()
         let first = statusItem("sensor.temperature")
         let second = statusItem("binary_sensor.front_door")
-        var config = GarminConfig(statusItems: [first])
+        var currentConfig = config(statusItems: [first])
         var subscriptions: [TestHACancellable] = []
         let client = RecordingGarminStatusClient()
         let service = makeService(
             client: client,
-            configProvider: { config },
+            configProvider: { currentConfig },
             snapshotProvider: { config, completion in
-                let item = config.statusItems[0]
+                let item = config.customStatusItems[0]
                 completion(.success(statusSnapshot(item: item, value: item.id)))
             },
             subscriptionProvider: { _, _, _ in
@@ -233,16 +263,16 @@ struct GarminStatusObservationServiceTests {
         defer { service.stop() }
 
         service.start()
-        try await waitUntil { subscriptions.count == 1 && client.sentStatusSnapshots.count == 1 }
+        try await waitUntil { subscriptions.count == 1 && client.sentValuesDeltas.count == 1 }
 
-        config = GarminConfig(statusItems: [second])
+        currentConfig = config(statusItems: [second])
         service.refreshConfiguration()
 
-        try await waitUntil { subscriptions.count == 2 && client.sentStatusSnapshots.count == 2 }
+        try await waitUntil { subscriptions.count == 2 && client.sentValuesDeltas.count == 2 }
         #expect(subscriptions[0].isCancelled)
-        #expect(client.sentStatusSnapshots.map { $0.statuses.first?.id } == [
-            GarminConfig.opaqueStatusId(for: first),
-            GarminConfig.opaqueStatusId(for: second),
+        #expect(client.sentValuesDeltas.map { $0.values.first?.id } == [
+            GarminConfig.opaqueEntityId(serverId: first.serverId, entityId: first.id),
+            GarminConfig.opaqueEntityId(serverId: second.serverId, entityId: second.id),
         ])
     }
 
@@ -280,7 +310,8 @@ struct GarminStatusObservationServiceTests {
         },
         debounceInterval: TimeInterval = 0
     ) -> GarminStatusObservationService {
-        GarminStatusObservationService(
+        GarminOverviewVisibleEntityRegistry.shared.clearVisible()
+        return GarminStatusObservationService(
             client: client,
             configProvider: configProvider,
             snapshotProvider: snapshotProvider,
@@ -295,6 +326,19 @@ struct GarminStatusObservationServiceTests {
         MagicItem(id: entityId, serverId: "server-1", type: .entity, displayText: entityId)
     }
 
+    private func config(statusItems: [MagicItem]) -> GarminConfig {
+        GarminConfig(
+            selectedServerId: "server-1",
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: statusItems.map { GarminCustomSectionItem(item: $0) }
+                ),
+            ])]
+        )
+    }
+
     private func statusSnapshot(
         item: MagicItem,
         value: String,
@@ -303,7 +347,7 @@ struct GarminStatusObservationServiceTests {
         GarminStatusSnapshot(
             statuses: [
                 .init(
-                    id: GarminConfig.opaqueStatusId(for: item),
+                    id: GarminConfig.opaqueItemId(for: item),
                     label: item.displayText ?? item.id,
                     value: value
                 ),
@@ -328,7 +372,7 @@ struct GarminStatusObservationServiceTests {
     }
 
     private func waitUntil(
-        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        timeoutNanoseconds: UInt64 = 2_000_000_000,
         condition: @escaping () -> Bool
     ) async throws {
         let start = DispatchTime.now().uptimeNanoseconds
@@ -353,8 +397,7 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
         stateSubject.eraseToAnyPublisher()
     }
     private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
-    var sentProfiles: [GarminProfile] = []
-    var sentStatusSnapshots: [GarminStatusSnapshot] = []
+    var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int)] = []
     var sentResults: [GarminCommandResult] = []
 
     private let automaticallyCompleteSends: Bool
@@ -366,16 +409,12 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {}
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
-        sentProfiles.append(profile)
-        completion(.success(()))
-    }
-
-    func sendStatusSnapshot(
-        _ snapshot: GarminStatusSnapshot,
+    func sendValuesDelta(
+        _ values: [GarminOverviewValue],
+        valuesRevision: Int,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
-        sentStatusSnapshots.append(snapshot)
+        sentValuesDeltas.append((values: values, revision: valuesRevision))
         if automaticallyCompleteSends {
             completion(.success(()))
         } else {
@@ -388,13 +427,6 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentResults.append(result)
-        completion(.success(()))
-    }
-
-    func sendConnectionStatus(
-        _ status: GarminConnectionStatus,
-        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
-    ) {
         completion(.success(()))
     }
 

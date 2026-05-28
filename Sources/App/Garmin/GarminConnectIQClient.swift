@@ -24,13 +24,39 @@ protocol GarminConnectIQClient: AnyObject {
     var state: GarminConnectionState { get }
     var statePublisher: AnyPublisher<GarminConnectionState, Never> { get }
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void)
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
-    func sendStatusSnapshot(_ snapshot: GarminStatusSnapshot, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
+    func sendSectionSnapshot(_ section: GarminOverviewSection, correlationId: String?, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
+    func sendSectionNotModified(sectionId: String, correlationId: String?, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
+    func sendValuesDelta(_ values: [GarminOverviewValue], valuesRevision: Int, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func sendActionResult(_ result: GarminCommandResult, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
-    func sendConnectionStatus(_ status: GarminConnectionStatus, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func disconnect()
     func requestDeviceSelection(force: Bool)
     func handleDeviceSelectionResponse(_ url: URL) -> Bool
+}
+
+extension GarminConnectIQClient {
+    func sendSectionSnapshot(
+        _ section: GarminOverviewSection,
+        correlationId: String?,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.success(()))
+    }
+
+    func sendSectionNotModified(
+        sectionId: String,
+        correlationId: String?,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.success(()))
+    }
+
+    func sendValuesDelta(
+        _ values: [GarminOverviewValue],
+        valuesRevision: Int,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.success(()))
+    }
 }
 
 struct GarminConnectionDiagnostics: Equatable {

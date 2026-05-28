@@ -35,6 +35,7 @@ final class GarminStatusObservationService {
     private var inFlightSnapshotSignature: SnapshotSignature?
     private var lastAttemptedSnapshotSignature: SnapshotSignature?
     private var pendingSnapshot: GarminStatusSnapshot?
+    private var pendingConfig: GarminConfig?
     private var sendGeneration = 0
 
     init(
@@ -84,6 +85,12 @@ final class GarminStatusObservationService {
             name: UIApplication.didEnterBackgroundNotification,
             object: nil
         )
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(visibleItemsDidChange),
+            name: .garminVisibleItemsDidChange,
+            object: nil
+        )
         observeConfigChanges()
         refreshConfiguration()
     }
@@ -131,6 +138,10 @@ final class GarminStatusObservationService {
         workQueue.async { [weak self] in
             self?.cancelActiveObservation()
         }
+    }
+
+    @objc private func visibleItemsDidChange() {
+        refreshConfiguration()
     }
 
     private func restartObservation(config: GarminConfig?, forceRestart: Bool) {
@@ -195,6 +206,7 @@ final class GarminStatusObservationService {
         subscription = nil
         currentSignature = nil
         pendingSnapshot = nil
+        pendingConfig = nil
         sendGeneration += 1
         isSending = false
         inFlightSnapshotSignature = nil
@@ -229,7 +241,7 @@ final class GarminStatusObservationService {
                 switch result {
                 case let .success(snapshot):
                     self.cache(snapshot, statusIds: signature.statusIds)
-                    self.enqueue(snapshot)
+                    self.enqueue(snapshot, config: config)
                 case let .failure(error):
                     Current.Log.error("Garmin status snapshot refresh failed with error: \(error)")
                 }
@@ -245,7 +257,7 @@ final class GarminStatusObservationService {
         }
     }
 
-    private func enqueue(_ snapshot: GarminStatusSnapshot) {
+    private func enqueue(_ snapshot: GarminStatusSnapshot, config: GarminConfig) {
         guard client.state.isReady else {
             GarminDiagnostics.record(.statusSend, status: .skipped, metadata: [
                 "connection_state": GarminDiagnostics.connectionState(client.state),
@@ -276,23 +288,32 @@ final class GarminStatusObservationService {
                 return
             }
             pendingSnapshot = snapshot
+            pendingConfig = config
             return
         }
 
-        send(snapshot, signature: signature)
+        send(snapshot, signature: signature, config: config)
     }
 
-    private func send(_ snapshot: GarminStatusSnapshot, signature: SnapshotSignature) {
+    private func send(_ snapshot: GarminStatusSnapshot, signature: SnapshotSignature, config: GarminConfig) {
         isSending = true
         inFlightSnapshotSignature = signature
         let generation = sendGeneration
 
-        client.sendStatusSnapshot(snapshot) { [weak self] result in
+        let values = overviewValues(snapshot: snapshot, config: config)
+        guard !values.isEmpty else {
+            lastAttemptedSnapshotSignature = signature
+            isSending = false
+            inFlightSnapshotSignature = nil
+            return
+        }
+
+        client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next()) { [weak self] result in
             self?.workQueue.async {
                 guard let self, self.sendGeneration == generation else { return }
 
                 if case let .failure(error) = result {
-                    Current.Log.error("Failed to send Garmin status snapshot: \(error)")
+                    Current.Log.error("Failed to send Garmin values delta: \(error)")
                     GarminDiagnostics.record(.statusSend, status: .failed, metadata: [
                         "connection_state": GarminDiagnostics.connectionState(self.client.state),
                         "send_state": "completed",
@@ -312,12 +333,26 @@ final class GarminStatusObservationService {
                 self.inFlightSnapshotSignature = nil
 
                 guard let pendingSnapshot = self.pendingSnapshot else { return }
+                guard let pendingConfig = self.pendingConfig else { return }
                 self.pendingSnapshot = nil
+                self.pendingConfig = nil
 
                 let pendingSignature = SnapshotSignature(snapshot: pendingSnapshot)
                 guard pendingSignature != self.lastAttemptedSnapshotSignature else { return }
-                self.send(pendingSnapshot, signature: pendingSignature)
+                self.send(pendingSnapshot, signature: pendingSignature, config: pendingConfig)
             }
+        }
+    }
+
+    private func overviewValues(snapshot: GarminStatusSnapshot, config: GarminConfig) -> [GarminOverviewValue] {
+        let valuesByStatusId = Dictionary(uniqueKeysWithValues: snapshot.statuses.map { ($0.id, $0.value) })
+        return Self.observedStatusItems(config).compactMap { item -> GarminOverviewValue? in
+            let itemId = GarminConfig.opaqueItemId(for: item)
+            guard let value = valuesByStatusId[itemId] else { return nil }
+            return GarminOverviewValue(
+                id: itemId,
+                value: value
+            )
         }
     }
 
@@ -356,11 +391,21 @@ final class GarminStatusObservationService {
         return cancellable.isEmpty ? nil : cancellable
     }
 
-    private static func observedStatusItems(_ config: GarminConfig) -> [MagicItem] {
-        config.statusItems
-            .prefix(GarminConfig.maxStatusItems)
+    fileprivate static func observedStatusItems(_ config: GarminConfig) -> [MagicItem] {
+        var seen = Set<String>()
+        return Array((GarminOverviewVisibleEntityRegistry.shared.visibleStatusItems(limit: GarminConfig.maxSectionItems) + config.customStatusItems)
             .filter { GarminSupportedDomains.supportsStatus($0) }
+            .filter { item in
+                guard !seen.contains(item.serverUniqueId) else { return false }
+                seen.insert(item.serverUniqueId)
+                return true
+            }
+            .prefix(GarminConfig.maxSectionItems))
     }
+}
+
+extension Notification.Name {
+    static let garminVisibleItemsDidChange = Notification.Name("io.home-assistant.garmin.visible-items-did-change")
 }
 
 final class GarminObservedEntityStateTracker {
@@ -441,11 +486,9 @@ private struct ObservationSignature: Equatable {
     let entityIdsByServer: [String: [String]]
 
     init(config: GarminConfig) {
-        let items = config.statusItems
-            .prefix(GarminConfig.maxStatusItems)
-            .filter { GarminSupportedDomains.supportsStatus($0) }
+        let items = GarminStatusObservationService.observedStatusItems(config)
 
-        statusIds = items.map { GarminConfig.opaqueStatusId(for: $0) }
+        statusIds = items.map { GarminConfig.opaqueItemId(for: $0) }
         entityIdsByServer = Dictionary(grouping: items, by: \.serverId).mapValues { items in
             items.map(\.id).sorted()
         }

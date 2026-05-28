@@ -78,7 +78,7 @@ struct GarminDiagnosticsTests {
             let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: "garmin_action_missing",
+                id: "e_missing",
                 correlationId: "c1"
             )
 
@@ -98,7 +98,7 @@ struct GarminDiagnosticsTests {
 
             #expect(payloadText.contains(GarminIntegrationError.missingAction.rawValue))
             #expect(correlationId == "c1")
-            #expect(!payloadText.contains("garmin_action_missing"))
+            #expect(!payloadText.contains("e_missing"))
             #expect(!payloadText.contains("entity_id"))
             #expect(!payloadText.contains("service_data"))
         }
@@ -124,14 +124,14 @@ struct GarminDiagnosticsTests {
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temperature")
             let snapshot = GarminStatusSnapshot(
                 statuses: [
-                    .init(id: GarminConfig.opaqueStatusId(for: item), label: "Temperature", value: "20 C"),
+                    .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "20 C"),
                 ],
                 updatedAt: 1
             )
-            let client = DiagnosticsGarminClient(statusSendResult: .failure(.watchUnavailable))
+            let client = DiagnosticsGarminClient(valuesSendResult: .failure(.watchUnavailable))
             let service = GarminStatusObservationService(
                 client: client,
-                configProvider: { GarminConfig(statusItems: [item]) },
+                configProvider: { config(statusItems: [item]) },
                 snapshotProvider: { _, completion in completion(.success(snapshot)) },
                 subscriptionProvider: { _, _, _ in nil },
                 isAppActive: { true },
@@ -191,6 +191,19 @@ struct GarminDiagnosticsTests {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
     }
+
+    private func config(statusItems: [MagicItem]) -> GarminConfig {
+        GarminConfig(
+            selectedServerId: "server-1",
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: statusItems.map { GarminCustomSectionItem(item: $0) }
+                ),
+            ])]
+        )
+    }
 }
 
 private final class DiagnosticsClientEventStore: ClientEventStoreProtocol {
@@ -220,34 +233,24 @@ private final class DiagnosticsGarminClient: GarminConnectIQClient {
         stateSubject.eraseToAnyPublisher()
     }
     private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
-    var statusSendResult: Result<Void, GarminIntegrationError>
+    var valuesSendResult: Result<Void, GarminIntegrationError>
 
-    init(statusSendResult: Result<Void, GarminIntegrationError> = .success(())) {
-        self.statusSendResult = statusSendResult
+    init(valuesSendResult: Result<Void, GarminIntegrationError> = .success(())) {
+        self.valuesSendResult = valuesSendResult
     }
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {}
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
-        completion(.success(()))
-    }
-
-    func sendStatusSnapshot(
-        _ snapshot: GarminStatusSnapshot,
+    func sendValuesDelta(
+        _ values: [GarminOverviewValue],
+        valuesRevision: Int,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
-        completion(statusSendResult)
+        completion(valuesSendResult)
     }
 
     func sendActionResult(
         _ result: GarminCommandResult,
-        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
-    ) {
-        completion(.success(()))
-    }
-
-    func sendConnectionStatus(
-        _ status: GarminConnectionStatus,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         completion(.success(()))

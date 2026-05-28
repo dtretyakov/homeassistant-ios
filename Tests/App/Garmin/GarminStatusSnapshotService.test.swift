@@ -28,14 +28,14 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let snapshot = try await service.snapshot(
-                config: GarminConfig(statusItems: [first, second]),
+                config: config(statusItems: [first, second]),
                 itemInfo: { _ in nil }
             )
 
             #expect(snapshot.updatedAt == 1_710_000_000)
             #expect(snapshot.statuses.map(\.id) == [
-                GarminConfig.opaqueStatusId(for: first),
-                GarminConfig.opaqueStatusId(for: second),
+                GarminConfig.opaqueItemId(for: first),
+                GarminConfig.opaqueItemId(for: second),
             ])
             #expect(snapshot.statuses.map(\.label) == ["Temp", "Door"])
             #expect(snapshot.statuses.map(\.value) == ["22.4 °C", "Open"])
@@ -57,7 +57,7 @@ struct GarminStatusSnapshotServiceTests {
             })
 
             async let snapshotTask = service.snapshot(
-                config: GarminConfig(statusItems: [item]),
+                config: config(statusItems: [item]),
                 itemInfo: { _ in nil }
             )
             for _ in 0..<100 where connection.pendingRequests.isEmpty {
@@ -82,7 +82,7 @@ struct GarminStatusSnapshotServiceTests {
             let result = try await snapshotTask
 
             #expect(result.updatedAt == 1_710_000_010)
-            #expect(result.statuses.first?.id == GarminConfig.opaqueStatusId(for: item))
+            #expect(result.statuses.first?.id == GarminConfig.opaqueItemId(for: item))
             #expect(result.statuses.first?.value == "22.456 °C")
         }
     }
@@ -105,7 +105,7 @@ struct GarminStatusSnapshotServiceTests {
             dateProvider: { Date(timeIntervalSince1970: 1_710_000_001) }
         )
 
-        let snapshot = try await service.snapshot(config: GarminConfig(statusItems: items), itemInfo: { _ in nil })
+        let snapshot = try await service.snapshot(config: config(statusItems: items), itemInfo: { _ in nil })
 
         #expect(snapshot.statuses.count == GarminConfig.maxStatusItems)
         #expect(snapshot.statuses.allSatisfy { $0.value == "Unavailable" })
@@ -121,12 +121,12 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let result = await service.snapshotWithCacheFallback(
-                config: GarminConfig(statusItems: [item]),
+                config: config(statusItems: [item]),
                 itemInfo: { _ in nil }
             )
 
             let snapshot = try result.get()
-            let statusIds = GarminStatusSnapshotService.statusIds(for: GarminConfig(statusItems: [item]))
+            let statusIds = GarminStatusSnapshotService.statusIds(for: config(statusItems: [item]))
             let maybeCachedSnapshot = try GarminStatusSnapshotCache.cachedSnapshot(statusIds: statusIds)
             let cachedSnapshot = try #require(maybeCachedSnapshot)
             #expect(snapshot == cachedSnapshot)
@@ -139,7 +139,7 @@ struct GarminStatusSnapshotServiceTests {
 
         try await withServer(identifier: "server-1") {
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
-            let statusIds = GarminStatusSnapshotService.statusIds(for: GarminConfig(statusItems: [item]))
+            let statusIds = GarminStatusSnapshotService.statusIds(for: config(statusItems: [item]))
             let statusId = try #require(statusIds.first)
             let cachedSnapshot = GarminStatusSnapshot(
                 statuses: [.init(id: statusId, label: "Temp", value: "20 °C")],
@@ -155,7 +155,7 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let result = await service.snapshotWithCacheFallback(
-                config: GarminConfig(statusItems: [item]),
+                config: config(statusItems: [item]),
                 itemInfo: { _ in nil }
             )
 
@@ -175,7 +175,7 @@ struct GarminStatusSnapshotServiceTests {
             Current.setCachedApi(api, for: server.identifier)
 
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
-            let statusIds = GarminStatusSnapshotService.statusIds(for: GarminConfig(statusItems: [item]))
+            let statusIds = GarminStatusSnapshotService.statusIds(for: config(statusItems: [item]))
             let statusId = try #require(statusIds.first)
             let cachedSnapshot = GarminStatusSnapshot(
                 statuses: [.init(id: statusId, label: "Temp", value: "20 °C")],
@@ -186,7 +186,7 @@ struct GarminStatusSnapshotServiceTests {
             let service = GarminStatusSnapshotService()
             let resultTask = Task {
                 await service.snapshotWithCacheFallback(
-                    config: GarminConfig(statusItems: [item]),
+                    config: config(statusItems: [item]),
                     itemInfo: { _ in nil }
                 )
             }
@@ -218,7 +218,7 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let result = await service.snapshotWithCacheFallback(
-                config: GarminConfig(statusItems: [item]),
+                config: config(statusItems: [item]),
                 itemInfo: { _ in nil }
             )
 
@@ -239,7 +239,7 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let result = await service.snapshotWithCacheFallback(
-                config: GarminConfig(statusItems: [item]),
+                config: config(statusItems: [item]),
                 itemInfo: { _ in nil }
             )
 
@@ -265,6 +265,19 @@ struct GarminStatusSnapshotServiceTests {
         #expect(!encoded.contains("http://"))
         #expect(!encoded.contains("https://"))
         #expect(!encoded.contains("access_token"))
+    }
+
+    private func config(statusItems: [MagicItem]) -> GarminConfig {
+        GarminConfig(
+            selectedServerId: "server-1",
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: statusItems.map { GarminCustomSectionItem(item: $0) }
+                ),
+            ])]
+        )
     }
 
     private func withServer(

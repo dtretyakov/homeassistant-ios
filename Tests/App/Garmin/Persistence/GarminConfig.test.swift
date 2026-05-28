@@ -24,7 +24,13 @@ struct GarminConfigTests {
         let item = MagicItem(id: "script.good_morning", serverId: "server-1", type: .script)
         let config = GarminConfig(
             selectedServerId: "server-1",
-            actionItems: [item],
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: [GarminCustomSectionItem(item: item)]
+                ),
+            ])],
             deviceIdentifier: "garmin-device",
             appIdentifier: "garmin-app",
             deviceName: "Venu 2",
@@ -37,30 +43,76 @@ struct GarminConfigTests {
             try config.insert(db, onConflict: .replace)
         }
 
-        #expect(try GarminConfig.config() == config)
+        let persistedConfig = try GarminConfig.config()
+        #expect(persistedConfig == config)
     }
 
     @Test func opaqueIdentifiersDoNotExposeRawEntityIds() throws {
         let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
 
-        let actionId = GarminConfig.opaqueActionId(for: item)
-        let statusId = GarminConfig.opaqueStatusId(for: item)
+        let itemId = GarminConfig.opaqueItemId(for: item)
 
-        #expect(actionId.hasPrefix("garmin_action_"))
-        #expect(statusId.hasPrefix("garmin_status_"))
-        #expect(!actionId.contains("light.kitchen"))
-        #expect(!statusId.contains("light.kitchen"))
-        #expect(!actionId.contains("server-1"))
-        #expect(!statusId.contains("server-1"))
+        #expect(itemId.hasPrefix("e_"))
+        #expect(!itemId.contains("light.kitchen"))
+        #expect(!itemId.contains("server-1"))
     }
 
-    @Test func resolvesActionsByOpaqueIdentifier() throws {
+    @Test func resolvesItemAndActionByOpaqueIdentifier() throws {
         let item = MagicItem(id: "switch.office", serverId: "server-1", type: .entity)
-        let config = GarminConfig(actionItems: [item])
+        let config = GarminConfig(selectedServerId: "server-1", serverConfigs: [.init(serverId: "server-1", customSections: [
+            .init(
+                id: "custom-1",
+                title: "Quick",
+                items: [GarminCustomSectionItem(item: item)]
+            ),
+        ])])
+        let itemId = GarminConfig.opaqueItemId(for: item)
 
-        let resolved = config.action(for: GarminConfig.opaqueActionId(for: item))
+        #expect(config.item(for: itemId) == item)
+        #expect(config.action(for: itemId) == item)
+    }
 
-        #expect(resolved == item)
+    @Test func displayOnlyItemDoesNotResolveAsAction() throws {
+        let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
+        let config = GarminConfig(selectedServerId: "server-1", serverConfigs: [.init(serverId: "server-1", customSections: [
+            .init(
+                id: "custom-1",
+                title: "Quick",
+                items: [GarminCustomSectionItem(item: item)]
+            ),
+        ])])
+        let itemId = GarminConfig.opaqueItemId(for: item)
+
+        #expect(config.item(for: itemId) == item)
+        #expect(config.action(for: itemId) == nil)
+    }
+
+    @Test func capabilityBitmaskMatchesDomainSupport() throws {
+        #expect(GarminConfig.capability(for: MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)) == 1)
+        #expect(GarminConfig.capability(for: MagicItem(id: "script.good_morning", serverId: "server-1", type: .script)) == 2)
+        #expect(GarminConfig.capability(for: MagicItem(id: "scene.movie", serverId: "server-1", type: .scene)) == 2)
+        #expect(GarminConfig.capability(for: MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)) == 3)
+        #expect(GarminConfig.capability(for: MagicItem(id: "lock.front_door", serverId: "server-1", type: .entity)) == 3)
+    }
+
+    @Test func decodesLegacyCustomSectionItemsAndMergesDuplicates() throws {
+        let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
+        let section = GarminCustomSection(
+            id: "custom-1",
+            title: "Quick",
+            items: [
+                GarminCustomSectionItem(item: item),
+                GarminCustomSectionItem(item: item),
+            ]
+        )
+        let encoded = try JSONEncoder().encode(GarminServerOverviewConfig(
+            serverId: "server-1",
+            customSections: [section]
+        ))
+
+        let decoded = try JSONDecoder().decode(GarminServerOverviewConfig.self, from: encoded)
+
+        #expect(decoded.customSections.first?.items.map(\.item.id) == ["light.kitchen"])
     }
 
     @Test func supportsExpectedActionDomains() throws {
@@ -69,7 +121,7 @@ struct GarminConfigTests {
         #expect(GarminSupportedDomains.supportsAction(.light))
         #expect(GarminSupportedDomains.supportsAction(.switch))
         #expect(GarminSupportedDomains.supportsAction(.inputBoolean))
-        #expect(!GarminSupportedDomains.supportsAction(.lock))
+        #expect(GarminSupportedDomains.supportsAction(.lock))
         #expect(GarminSupportedDomains.supportsAction(.cover))
         #expect(GarminSupportedDomains.supportsStatus(rawDomain: Domain.sensor.rawValue))
         #expect(GarminSupportedDomains.supportsStatus(rawDomain: Domain.lock.rawValue))

@@ -16,8 +16,7 @@ final class GarminConfigTable: DatabaseTableProtocol {
                 try db.create(table: tableName) { t in
                     t.primaryKey(Column.id.rawValue, .text).notNull()
                     t.column(Column.selectedServerId.rawValue, .text)
-                    t.column(Column.actionItems.rawValue, .jsonText).notNull()
-                    t.column(Column.statusItems.rawValue, .jsonText).notNull()
+                    t.column(Column.serverConfigs.rawValue, .jsonText).notNull()
                     t.column(Column.deviceIdentifier.rawValue, .text)
                     t.column(Column.appIdentifier.rawValue, .text)
                     t.column(Column.deviceName.rawValue, .text)
@@ -28,14 +27,16 @@ final class GarminConfigTable: DatabaseTableProtocol {
             }
         } else {
             try migrateColumns(database: database)
+            try database.write { db in
+                try db.execute(sql: "UPDATE \(tableName) SET \(Column.serverConfigs.rawValue) = '[]' WHERE \(Column.serverConfigs.rawValue) IS NULL")
+            }
         }
     }
 
     enum Column: String, CaseIterable {
         case id
         case selectedServerId
-        case actionItems
-        case statusItems
+        case serverConfigs
         case deviceIdentifier
         case appIdentifier
         case deviceName

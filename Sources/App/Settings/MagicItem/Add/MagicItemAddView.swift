@@ -42,7 +42,7 @@ struct MagicItemAddView: View {
         self.itemToAdd = itemToAdd
         self.showsConfirmationToggle = showsConfirmationToggle
         self.garminRawDomainFilters = garminRawDomainFilters ?? (
-            context == .garmin ? GarminSupportedDomains.actionDomainRawValues : nil
+            context == .garmin ? GarminSupportedDomains.overviewDomainRawValues : nil
         )
 
         let resolvedPickerOptions = visiblePickerOptions ?? {
@@ -256,15 +256,25 @@ struct MagicItemAddView: View {
                 selectedEntity = nil
             })) {
                 if let selectedEntity {
+                    let itemType = context == .garmin ? garminMagicItemType(for: selectedEntity) : .entity
+                    let supportsGarminAction = context == .garmin && GarminSupportedDomains.supportsAction(rawDomain: selectedEntity.domain)
+                    let item = MagicItem(
+                        id: selectedEntity.entityId,
+                        serverId: selectedEntity.serverId,
+                        type: itemType,
+                        customization: supportsGarminAction && showsConfirmationToggle ? .init(
+                            requiresConfirmation: GarminActionConfirmationPolicy.defaultRequiresConfirmation(for: .init(
+                                id: selectedEntity.entityId,
+                                serverId: selectedEntity.serverId,
+                                type: itemType
+                            ))
+                        ) : nil
+                    )
                     MagicItemCustomizationView(
                         mode: .add,
                         context: context,
-                        item: .init(
-                            id: selectedEntity.entityId,
-                            serverId: selectedEntity.serverId,
-                            type: context == .garmin ? garminMagicItemType(for: selectedEntity) : .entity
-                        ),
-                        showsConfirmationToggle: showsConfirmationToggle
+                        item: item,
+                        showsConfirmationToggle: showsConfirmationToggle && supportsGarminAction
                     ) { itemToAdd in
                         self.itemToAdd(itemToAdd)
                         dismiss()

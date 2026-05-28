@@ -6,182 +6,296 @@ import Testing
 
 @Suite(.serialized)
 struct GarminConfigurationViewModelTests {
-    @Test func addSupportedActionStoresItemLocally() throws {
+    @Test func addCustomSectionStoresAndSyncs() throws {
+        try withViewModel { viewModel, controller in
+            viewModel.addCustomSection()
+
+            #expect(viewModel.config.customSections.count == 1)
+            #expect(viewModel.config.customSections.first?.title == "New section")
+            let persistedConfig = try GarminConfig.config()
+            #expect(persistedConfig?.customSections.count == 1)
+            #expect(controller.syncedConfigs.last?.customSections.count == 1)
+        }
+    }
+
+    @Test func renameMoveAndDeleteCustomSections() throws {
         try withViewModel { viewModel in
+            viewModel.addCustomSection()
+            viewModel.addCustomSection()
+            let firstId = try #require(viewModel.config.customSections.first?.id)
+            let secondId = try #require(viewModel.config.customSections.last?.id)
+
+            viewModel.updateCustomSectionTitle(sectionId: firstId, title: "Downstairs")
+            viewModel.moveCustomSection(from: IndexSet(integer: 0), to: 2)
+
+            #expect(viewModel.config.customSections.map(\.id) == [secondId, firstId])
+            #expect(viewModel.config.customSections.last?.title == "Downstairs")
+
+            viewModel.deleteCustomSection(at: IndexSet(integer: 1))
+
+            #expect(viewModel.config.customSections.map(\.id) == [secondId])
+        }
+    }
+
+    @Test func addItemsStoresUnifiedCapabilityItemsInTargetSection() throws {
+        try withViewModel { viewModel in
+            viewModel.addCustomSection()
+            let sectionId = try #require(viewModel.config.customSections.first?.id)
+            let status = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temperature")
+            let action = MagicItem(
+                id: "scene.movie",
+                serverId: "server-1",
+                type: .scene,
+                customization: nil,
+                displayText: "Movie"
+            )
+
+            viewModel.addItem(status, to: sectionId)
+            viewModel.addItem(action, to: sectionId)
+
+            let section = try #require(viewModel.config.customSections.first)
+            #expect(section.items.first?.item == status)
+            #expect(section.items.last?.item.id == action.id)
+            #expect(section.items.last?.item.customization?.requiresConfirmation == true)
+            #expect(viewModel.config.selectedServerId == "server-1")
+            let persistedConfig = try GarminConfig.config()
+            #expect(persistedConfig?.customSections.first?.items.map(\.item.id) == ["sensor.temperature", "scene.movie"])
+        }
+    }
+
+    @Test func duplicateCustomItemIsIgnoredInsideSameSection() throws {
+        try withViewModel { viewModel in
+            viewModel.addCustomSection()
+            let sectionId = try #require(viewModel.config.customSections.first?.id)
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
 
-            viewModel.addAction(item)
+            viewModel.addItem(item, to: sectionId)
+            viewModel.addItem(item, to: sectionId)
 
-            #expect(viewModel.config.actionItems == [item])
-            let persistedConfig = try GarminConfig.config()
-            #expect(persistedConfig?.actionItems == [item])
+            #expect(viewModel.config.customSections.first?.items.map(\.item.id) == ["light.kitchen"])
+            #expect(viewModel.showError)
         }
     }
 
-    @Test func duplicateActionIsIgnored() throws {
+    @Test func addCustomItemRejectsDifferentServer() throws {
         try withViewModel { viewModel in
-            let item = MagicItem(id: "script.good_morning", serverId: "server-1", type: .script)
+            viewModel.config.selectedServerId = "server-1"
+            viewModel.addCustomSection()
+            let sectionId = try #require(viewModel.config.customSections.first?.id)
 
-            viewModel.addAction(item)
-            viewModel.addAction(item)
+            viewModel.addItem(MagicItem(id: "sensor.temperature", serverId: "server-2", type: .entity), to: sectionId)
 
-            #expect(viewModel.config.actionItems == [item])
+            #expect(viewModel.config.customSections.first?.items.isEmpty == true)
+            #expect(viewModel.showError)
         }
     }
 
-    @Test func deleteActionRemovesItem() throws {
+    @Test func switchingServerPreservesCustomItemsPerServer() throws {
         try withViewModel { viewModel in
-            let first = MagicItem(id: "script.first", serverId: "server-1", type: .script)
-            let second = MagicItem(id: "scene.second", serverId: "server-1", type: .scene)
-            viewModel.addAction(first)
-            viewModel.addAction(second)
+            viewModel.config.selectedServerId = "server-1"
+            viewModel.config.serverConfigs = [
+                .init(serverId: "server-1", customSections: [
+                    .init(
+                        id: "server-1-section",
+                        title: "Server 1",
+                        items: [
+                            .init(item: MagicItem(id: "sensor.one", serverId: "server-1", type: .entity)),
+                        ]
+                    ),
+                ]),
+                .init(serverId: "server-2", customSections: [
+                    .init(
+                        id: "server-2-section",
+                        title: "Server 2",
+                        items: [
+                            .init(item: MagicItem(id: "sensor.two", serverId: "server-2", type: .entity)),
+                        ]
+                    ),
+                ]),
+            ]
 
-            viewModel.deleteAction(at: IndexSet(integer: 0))
+            viewModel.setSelectedServerId("server-2")
 
-            #expect(viewModel.config.actionItems == [second])
+            #expect(viewModel.config.customSections.first?.items.map(\.item.id) == ["sensor.two"])
+
+            viewModel.setSelectedServerId("server-1")
+
+            #expect(viewModel.config.customSections.first?.items.map(\.item.id) == ["sensor.one"])
         }
     }
 
-    @Test func moveActionPreservesNewOrder() throws {
+    @Test func switchingToNewServerCreatesDefaultServerConfig() throws {
         try withViewModel { viewModel in
-            let first = MagicItem(id: "script.first", serverId: "server-1", type: .script)
-            let second = MagicItem(id: "script.second", serverId: "server-1", type: .script)
-            let third = MagicItem(id: "script.third", serverId: "server-1", type: .script)
-            viewModel.addAction(first)
-            viewModel.addAction(second)
-            viewModel.addAction(third)
-
-            viewModel.moveAction(from: IndexSet(integer: 0), to: 3)
-
-            #expect(viewModel.config.actionItems == [second, third, first])
-        }
-    }
-
-    @Test func updateActionChangesDisplayText() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(id: "switch.office", serverId: "server-1", type: .entity)
-            viewModel.addAction(item)
-
-            var updated = item
-            updated.displayText = "Office"
-            viewModel.updateAction(updated)
-
-            #expect(viewModel.config.actionItems.first?.displayText == "Office")
-        }
-    }
-
-    @Test func updateSafeActionCanToggleConfirmation() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(
-                id: "light.kitchen",
-                serverId: "server-1",
-                type: .entity,
-                customization: .init(requiresConfirmation: false)
-            )
-            viewModel.addAction(item)
-
-            var updated = item
-            updated.customization?.requiresConfirmation = true
-            viewModel.updateAction(updated)
-
-            #expect(viewModel.config.actionItems.first?.customization?.requiresConfirmation == true)
-        }
-    }
-
-    @Test func updateSafeActionCanClearConfirmation() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(
-                id: "switch.office",
-                serverId: "server-1",
-                type: .entity,
-                customization: .init(requiresConfirmation: true)
-            )
-            viewModel.addAction(item)
-
-            var updated = item
-            updated.customization?.requiresConfirmation = false
-            viewModel.updateAction(updated)
-
-            #expect(viewModel.config.actionItems.first?.customization?.requiresConfirmation == false)
-        }
-    }
-
-    @Test func updateCoverActionCanClearConfirmation() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(
-                id: "cover.garage",
-                serverId: "server-1",
-                type: .entity,
-                customization: .init(requiresConfirmation: true)
-            )
-            viewModel.addAction(item)
-
-            var updated = item
-            updated.customization?.requiresConfirmation = false
-            viewModel.updateAction(updated)
-
-            #expect(viewModel.config.actionItems.first?.customization?.requiresConfirmation == false)
-        }
-    }
-
-    @Test func addActionRefusesThirteenthItem() throws {
-        try withViewModel { viewModel in
-            for index in 0..<GarminConfig.maxActionItems {
-                viewModel.addAction(MagicItem(
-                    id: "script.item_\(index)",
+            viewModel.config.selectedServerId = "server-1"
+            viewModel.config.serverConfigs = [
+                .init(
                     serverId: "server-1",
-                    type: .script
-                ))
+                    customSections: [
+                        .init(
+                            id: "custom-1",
+                            title: "Quick",
+                            items: [
+                                .init(item: MagicItem(id: "sensor.one", serverId: "server-1", type: .entity)),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+
+            viewModel.setSelectedServerId("server-2")
+
+            #expect(viewModel.config.customSections.isEmpty)
+            #expect(viewModel.config.serverConfigs.map(\.serverId).contains("server-1"))
+            #expect(viewModel.config.serverConfigs.map(\.serverId).contains("server-2"))
+        }
+    }
+
+    @Test func customSectionsAreScopedToActiveServerConfig() throws {
+        try withViewModel { viewModel in
+            viewModel.config.selectedServerId = "server-1"
+            viewModel.config.serverConfigs = [
+                .init(
+                    serverId: "server-1",
+                    customSections: [
+                        GarminCustomSection(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: [
+                        .init(item: MagicItem(id: "sensor.one", serverId: "server-1", type: .entity)),
+                    ]
+                ),
+                    ]
+                ),
+            ]
+
+            viewModel.setSelectedServerId("server-2")
+
+            #expect(viewModel.config.customSections.isEmpty)
+        }
+    }
+
+    @Test func deleteMoveAndUpdateCustomItems() throws {
+        try withViewModel { viewModel in
+            viewModel.addCustomSection()
+            let sectionId = try #require(viewModel.config.customSections.first?.id)
+            let first = MagicItem(id: "sensor.first", serverId: "server-1", type: .entity)
+            let second = MagicItem(id: "sensor.second", serverId: "server-1", type: .entity)
+            let third = MagicItem(id: "sensor.third", serverId: "server-1", type: .entity)
+            viewModel.addItem(first, to: sectionId)
+            viewModel.addItem(second, to: sectionId)
+            viewModel.addItem(third, to: sectionId)
+            let secondItemId = try #require(viewModel.config.customSections.first?.items[1].id)
+
+            var renamedSecond = second
+            renamedSecond.displayText = "Second"
+            viewModel.updateCustomItem(sectionId: sectionId, itemId: secondItemId, updatedItem: renamedSecond)
+            viewModel.moveCustomItem(sectionId: sectionId, from: IndexSet(integer: 0), to: 3)
+            viewModel.deleteCustomItem(sectionId: sectionId, at: IndexSet(integer: 1))
+
+            let items = try #require(viewModel.config.customSections.first?.items)
+            #expect(items.map(\.item.id) == ["sensor.second", "sensor.first"])
+            #expect(items.first?.item.displayText == "Second")
+        }
+    }
+
+    @Test func addCustomSectionRefusesNinthSection() throws {
+        try withViewModel { viewModel in
+            for _ in 0..<GarminConfig.maxCustomSections {
+                viewModel.addCustomSection()
             }
 
-            viewModel.addAction(MagicItem(
-                id: "script.item_\(GarminConfig.maxActionItems)",
-                serverId: "server-1",
-                type: .script
-            ))
+            viewModel.addCustomSection()
 
-            #expect(viewModel.config.actionItems.count == GarminConfig.maxActionItems)
+            #expect(viewModel.config.customSections.count == GarminConfig.maxCustomSections)
+            #expect(viewModel.showError)
         }
     }
 
-    @Test func syncRefusesOversizedLegacyConfig() throws {
-        try withViewModel { viewModel, controller in
-            viewModel.config.actionItems = (0...GarminConfig.maxActionItems).map { index in
-                MagicItem(
-                    id: "script.item_\(index)",
+    @Test func addCustomItemRefusesSeventeenthItem() throws {
+        try withViewModel { viewModel in
+            viewModel.addCustomSection()
+            let sectionId = try #require(viewModel.config.customSections.first?.id)
+            for index in 0..<GarminConfig.maxSectionItems {
+                viewModel.addItem(MagicItem(
+                    id: "sensor.item_\(index)",
                     serverId: "server-1",
-                    type: .script
-                )
+                    type: .entity
+                ), to: sectionId)
+            }
+
+            viewModel.addItem(MagicItem(
+                id: "sensor.item_\(GarminConfig.maxSectionItems)",
+                serverId: "server-1",
+                type: .entity
+            ), to: sectionId)
+
+            #expect(viewModel.config.customSections.first?.items.count == GarminConfig.maxSectionItems)
+            #expect(viewModel.showError)
+        }
+    }
+
+    @Test func syncRefusesOversizedCustomSectionsConfig() throws {
+        try withViewModel { viewModel, controller in
+            viewModel.config.customSections = (0...GarminConfig.maxCustomSections).map { index in
+                GarminCustomSection(id: "section-\(index)", title: "Section \(index)")
             }
 
             viewModel.sync()
 
-            #expect(viewModel.config.actionItems.count == GarminConfig.maxActionItems + 1)
-            #expect(controller.sentProfiles.isEmpty)
+            #expect(viewModel.config.customSections.count == GarminConfig.maxCustomSections + 1)
+            #expect(controller.syncedConfigs.isEmpty)
+            #expect(viewModel.showError)
         }
     }
 
-    @Test func checkConnectionRequestsDeviceSelectionWithoutProfileSync() throws {
+    @Test func syncRefusesOversizedCustomSectionItemsConfig() throws {
+        try withViewModel { viewModel, controller in
+            viewModel.config.customSections = [
+                GarminCustomSection(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: (0...GarminConfig.maxSectionItems).map { index in
+                        GarminCustomSectionItem(
+                            item: MagicItem(id: "sensor.item_\(index)", serverId: "server-1", type: .entity)
+                        )
+                    }
+                ),
+            ]
+
+            viewModel.sync()
+
+            #expect(viewModel.config.customSections.first?.items.count == GarminConfig.maxSectionItems + 1)
+            #expect(controller.syncedConfigs.isEmpty)
+            #expect(viewModel.showError)
+        }
+    }
+
+    @Test func checkConnectionRequestsDeviceSelectionWithoutOverviewSync() throws {
         try withViewModel { viewModel, controller in
             viewModel.checkConnection()
 
             #expect(controller.didRequestConnectionCheck)
             #expect(viewModel.connectionState == .selectingDevice)
-            #expect(controller.sentProfiles.isEmpty)
+            #expect(controller.syncedConfigs.isEmpty)
         }
     }
 
-    @Test func disconnectUnpairsWatchWithoutRemovingContent() throws {
+    @Test func disconnectUnpairsWatchWithoutRemovingCustomSections() throws {
         try withViewModel { viewModel in
-            let action = MagicItem(id: "script.good_morning", serverId: "server-1", type: .script)
-            let status = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
+            let section = GarminCustomSection(
+                id: "custom-1",
+                title: "Quick",
+                items: [
+                    .init(item: MagicItem(id: "script.good_morning", serverId: "server-1", type: .script)),
+                    .init(item: MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)),
+                ]
+            )
             viewModel.config.selectedServerId = "server-1"
             viewModel.config.deviceIdentifier = "garmin-device"
             viewModel.config.appIdentifier = "garmin-app"
             viewModel.config.deviceName = "Venu 2"
             viewModel.config.lastCommunicationTimestamp = 456
-            viewModel.config.actionItems = [action]
-            viewModel.config.statusItems = [status]
+            viewModel.config.customSections = [section]
 
             viewModel.disconnect()
 
@@ -190,14 +304,13 @@ struct GarminConfigurationViewModelTests {
             #expect(viewModel.config.deviceName == nil)
             #expect(viewModel.config.lastCommunicationTimestamp == nil)
             #expect(viewModel.config.selectedServerId == "server-1")
-            #expect(viewModel.config.actionItems == [action])
-            #expect(viewModel.config.statusItems == [status])
+            #expect(viewModel.config.customSections == [section])
         }
     }
 
     @Test func connectionStateRefreshesPersistedPairingFields() async throws {
-        try await withViewModel { viewModel, controller in
-            try Current.database().write { db in
+        try await withViewModel { (viewModel: GarminConfigurationViewModel, controller: FakeGarminIntegrationController) async throws in
+            try await Current.database().write { db in
                 var config = viewModel.config
                 config.deviceIdentifier = "garmin-device"
                 config.appIdentifier = "garmin-app"
@@ -213,107 +326,6 @@ struct GarminConfigurationViewModelTests {
             #expect(viewModel.config.appIdentifier == "garmin-app")
             #expect(viewModel.config.deviceName == "Venu 2")
             #expect(viewModel.config.lastCommunicationTimestamp == 456)
-        }
-    }
-
-    @Test func addSupportedStatusStoresItemLocally() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
-
-            viewModel.addStatus(item)
-
-            #expect(viewModel.config.statusItems == [item])
-            let persistedConfig = try GarminConfig.config()
-            #expect(persistedConfig?.statusItems == [item])
-        }
-    }
-
-    @Test func duplicateStatusIsIgnored() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(id: "binary_sensor.front_door", serverId: "server-1", type: .entity)
-
-            viewModel.addStatus(item)
-            viewModel.addStatus(item)
-
-            #expect(viewModel.config.statusItems == [item])
-        }
-    }
-
-    @Test func deleteStatusRemovesItem() throws {
-        try withViewModel { viewModel in
-            let first = MagicItem(id: "sensor.first", serverId: "server-1", type: .entity)
-            let second = MagicItem(id: "sensor.second", serverId: "server-1", type: .entity)
-            viewModel.addStatus(first)
-            viewModel.addStatus(second)
-
-            viewModel.deleteStatus(at: IndexSet(integer: 0))
-
-            #expect(viewModel.config.statusItems == [second])
-        }
-    }
-
-    @Test func moveStatusPreservesNewOrder() throws {
-        try withViewModel { viewModel in
-            let first = MagicItem(id: "sensor.first", serverId: "server-1", type: .entity)
-            let second = MagicItem(id: "sensor.second", serverId: "server-1", type: .entity)
-            let third = MagicItem(id: "sensor.third", serverId: "server-1", type: .entity)
-            viewModel.addStatus(first)
-            viewModel.addStatus(second)
-            viewModel.addStatus(third)
-
-            viewModel.moveStatus(from: IndexSet(integer: 0), to: 3)
-
-            #expect(viewModel.config.statusItems == [second, third, first])
-        }
-    }
-
-    @Test func updateStatusChangesDisplayText() throws {
-        try withViewModel { viewModel in
-            let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity)
-            viewModel.addStatus(item)
-
-            var updated = item
-            updated.displayText = "Temperature"
-            viewModel.updateStatus(updated)
-
-            #expect(viewModel.config.statusItems.first?.displayText == "Temperature")
-        }
-    }
-
-    @Test func addStatusRefusesSixthItem() throws {
-        try withViewModel { viewModel in
-            for index in 0..<GarminConfig.maxStatusItems {
-                viewModel.addStatus(MagicItem(
-                    id: "sensor.item_\(index)",
-                    serverId: "server-1",
-                    type: .entity
-                ))
-            }
-
-            viewModel.addStatus(MagicItem(
-                id: "sensor.item_\(GarminConfig.maxStatusItems)",
-                serverId: "server-1",
-                type: .entity
-            ))
-
-            #expect(viewModel.config.statusItems.count == GarminConfig.maxStatusItems)
-        }
-    }
-
-    @Test func syncRefusesOversizedLegacyStatusConfig() throws {
-        try withViewModel { viewModel, controller in
-            viewModel.config.statusItems = (0...GarminConfig.maxStatusItems).map { index in
-                MagicItem(
-                    id: "sensor.item_\(index)",
-                    serverId: "server-1",
-                    type: .entity
-                )
-            }
-
-            viewModel.sync()
-
-            #expect(viewModel.config.statusItems.count == GarminConfig.maxStatusItems + 1)
-            #expect(controller.sentProfiles.isEmpty)
         }
     }
 
@@ -334,6 +346,8 @@ struct GarminConfigurationViewModelTests {
 
         let controller = FakeGarminIntegrationController()
         let viewModel = GarminConfigurationViewModel(integrationController: controller)
+        viewModel.config.selectedServerId = "server-1"
+        viewModel.config.ensureServerConfig(serverId: "server-1")
         try body(viewModel, controller)
     }
 
@@ -348,6 +362,8 @@ struct GarminConfigurationViewModelTests {
 
         let controller = FakeGarminIntegrationController()
         let viewModel = GarminConfigurationViewModel(integrationController: controller)
+        viewModel.config.selectedServerId = "server-1"
+        viewModel.config.ensureServerConfig(serverId: "server-1")
         try await body(viewModel, controller)
     }
 }
@@ -365,7 +381,7 @@ private final class FakeGarminIntegrationController: GarminIntegrationControllin
     }
 
     var didRequestConnectionCheck = false
-    var sentProfiles: [GarminProfile] = []
+    var syncedConfigs: [GarminConfig] = []
 
     func setup() {}
 
@@ -387,8 +403,7 @@ private final class FakeGarminIntegrationController: GarminIntegrationControllin
         itemInfo: @escaping (MagicItem) -> MagicItem.Info?,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
-        let profile = GarminProfile(config: config, itemInfo: itemInfo)
-        sentProfiles.append(profile)
+        syncedConfigs.append(config)
         completion(.success(()))
     }
 

@@ -17,9 +17,9 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
     }
     private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
     var sentResults: [GarminCommandResult] = []
-    var sentConnectionStatuses: [GarminConnectionStatus] = []
-    var sentProfiles: [GarminProfile] = []
-    var sentStatusSnapshots: [GarminStatusSnapshot] = []
+    var sentSections: [(section: GarminOverviewSection, correlationId: String?)] = []
+    var sentSectionNotModifiedIds: [(sectionId: String, correlationId: String?)] = []
+    var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int)] = []
     var didRequestDeviceSelection = false
     private var commandHandler: ((GarminInboundMessage) -> Void)?
 
@@ -27,16 +27,30 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
         self.commandHandler = commandHandler
     }
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) {
-        sentProfiles.append(profile)
+    func sendSectionSnapshot(
+        _ section: GarminOverviewSection,
+        correlationId: String?,
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        sentSections.append((section, correlationId))
         completion(.success(()))
     }
 
-    func sendStatusSnapshot(
-        _ snapshot: GarminStatusSnapshot,
+    func sendSectionNotModified(
+        sectionId: String,
+        correlationId: String?,
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
-        sentStatusSnapshots.append(snapshot)
+        sentSectionNotModifiedIds.append((sectionId, correlationId))
+        completion(.success(()))
+    }
+
+    func sendValuesDelta(
+        _ values: [GarminOverviewValue],
+        valuesRevision: Int,
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        sentValuesDeltas.append((values: values, revision: valuesRevision))
         completion(.success(()))
     }
 
@@ -45,14 +59,6 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentResults.append(result)
-        completion(.success(()))
-    }
-
-    func sendConnectionStatus(
-        _ status: GarminConnectionStatus,
-        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
-    ) {
-        sentConnectionStatuses.append(status)
         completion(.success(()))
     }
 
@@ -86,41 +92,13 @@ private final class GarminFakeWebhookManager: WebhookManager {
 
 @Suite(.serialized)
 struct GarminIntegrationServiceTests {
-    @Test func pingSendsConnectionStatusWithoutConfig() throws {
-        let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
-        service.setup { nil }
-
-        service.handle(GarminInboundMessage(type: .ping, correlationId: "h1"))
-
-        #expect(client.sentConnectionStatuses == [
-            GarminConnectionStatus(correlationId: "h1", state: .success),
-        ])
-        #expect(client.sentResults.isEmpty)
-    }
-
-    @Test func unsupportedPingProtocolSendsConnectionStatusError() throws {
-        let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
-        service.setup { nil }
-
-        service.handle(GarminInboundMessage(version: 999, type: .ping, correlationId: "h1"))
-
-        #expect(client.sentConnectionStatuses == [
-            GarminConnectionStatus(correlationId: "h1", state: .failed, error: .unsupportedProtocol),
-        ])
-        #expect(client.sentResults.isEmpty)
-    }
-
-    @Test func sdkClientRejectsOversizedProfileBeforeTransportSend() throws {
+    @Test func sdkClientRejectsOversizedSectionBeforeTransportSend() throws {
         let client = GarminConnectIQSDKClient()
         let oversizedLabel = String(repeating: "A", count: GarminPayloadLimits.outboundMessageBytes)
-        let profile = GarminProfile(actions: [
-            .init(id: "garmin_action_1", label: oversizedLabel),
-        ])
+        let section = GarminOverviewSection(id: "large", title: oversizedLabel, etag: "large", items: [])
         var sendResult: Swift.Result<Void, GarminIntegrationError>?
 
-        client.sendProfile(profile) { result in
+        client.sendSectionSnapshot(section, correlationId: nil) { result in
             sendResult = result
         }
 
@@ -178,92 +156,71 @@ struct GarminIntegrationServiceTests {
         #expect(handledResult?.error == .unsupportedProtocol)
     }
 
-    @Test func requestProfileSendsSanitizedProfile() throws {
+    @Test func syncDoesNotPushUncorrelatedSectionSnapshots() throws {
         let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
-        let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity, displayText: "Kitchen")
-        let message = GarminInboundMessage(type: .requestProfile, correlationId: "c1")
-        var handledResult: GarminCommandResult?
-
-        service.handle(message, config: GarminConfig(actionItems: [item])) { result in
-            handledResult = result
-        }
-
-        #expect(handledResult?.state == .success)
-        #expect(client.sentProfiles.count == 1)
-        #expect(client.sentProfiles.first?.actions.first?.label == "Kitchen")
-    }
-
-    @Test func requestStatusWithoutProviderFailsWithoutEmptySnapshot() throws {
-        let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
         let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temperature")
-        let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
-        var handledResult: GarminCommandResult?
+        let service = GarminIntegrationService(client: client)
+        let config = customConfig(statusItems: [item])
+        var didSync = false
 
-        service.handle(message, config: GarminConfig(statusItems: [item])) { result in
-            handledResult = result
+        service.sync(config: config, itemInfo: { _ in nil }) { result in
+            guard case .success = result else {
+                Issue.record("Expected sync success")
+                return
+            }
+            didSync = true
         }
 
-        #expect(handledResult?.state == .failed)
-        #expect(handledResult?.error == .unsupportedStatus)
-        #expect(client.sentStatusSnapshots.isEmpty)
+        #expect(didSync)
+        #expect(client.sentSections.isEmpty)
+        #expect(client.sentSectionNotModifiedIds.isEmpty)
+        #expect(client.sentValuesDeltas.isEmpty)
     }
 
-    @Test func requestStatusSendsProviderSnapshot() throws {
+    @Test func getSectionMatchingEtagReturnsNotModifiedThenFreshValues() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
         let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
-        let snapshot = GarminStatusSnapshot(
-            statuses: [.init(id: "garmin_status_1", label: "Temperature", value: "22 °C")],
-            updatedAt: 1_710_000_000
+        let item = MagicItem(
+            id: "sensor.temperature",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Temperature"
         )
-        let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
-        var handledResult: GarminCommandResult?
-
+        let config = customConfig(statusItems: [item])
+        let source = GarminHomeOverviewSource(entityProvider: { [] }, areaProvider: { _ in [] })
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.custom("custom-1"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+        let snapshot = GarminStatusSnapshot(statuses: [
+            .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "20 C"),
+        ])
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { source }
+        )
         service.setup(
-            configProvider: { GarminConfig() },
+            configProvider: { config },
             statusSnapshotProvider: { _, completion in completion(.success(snapshot)) }
         )
-        service.handle(message, config: GarminConfig()) { result in
-            handledResult = result
-        }
 
-        #expect(handledResult?.state == .success)
-        #expect(handledResult?.correlationId == "c1")
-        #expect(client.sentStatusSnapshots == [snapshot])
-    }
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.custom("custom-1"),
+            etag: section.etag,
+            correlationId: "s1"
+        ))
 
-    @Test func requestStatusProviderFailureSendsExplicitError() throws {
-        let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
-        let message = GarminInboundMessage(type: .requestStatus, correlationId: "c1")
-        var handledResult: GarminCommandResult?
-
-        service.setup(
-            configProvider: { GarminConfig() },
-            statusSnapshotProvider: { _, completion in completion(.failure(.homeAssistantUnavailable)) }
-        )
-        service.handle(message, config: GarminConfig()) { result in
-            handledResult = result
-        }
-
-        #expect(handledResult?.state == .failed)
-        #expect(handledResult?.error == .homeAssistantUnavailable)
-        #expect(handledResult?.correlationId == "c1")
-        #expect(client.sentStatusSnapshots.isEmpty)
-        #expect(client.sentResults.first?.error == .homeAssistantUnavailable)
-    }
-
-    @Test func missingConfigSendsResultForInboundMessage() throws {
-        let client = FakeGarminConnectIQClient()
-        let service = GarminIntegrationService(client: client)
-        service.setup { nil }
-
-        service.handle(GarminInboundMessage(type: .requestProfile, correlationId: "c1"))
-
-        #expect(client.sentResults.count == 1)
-        #expect(client.sentResults.first?.correlationId == "c1")
-        #expect(client.sentResults.first?.error == .missingConfig)
+        #expect(client.sentSectionNotModifiedIds.first?.sectionId == GarminOverviewSectionID.custom("custom-1"))
+        #expect(client.sentSectionNotModifiedIds.first?.correlationId == "s1")
+        #expect(client.sentValuesDeltas.count == 1)
+        #expect(client.sentValuesDeltas.first?.values == [
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: item.serverId, entityId: item.id),
+                value: "20 C"
+            ),
+        ])
     }
 
     @Test func missingActionFailsWithoutExecuting() throws {
@@ -273,7 +230,7 @@ struct GarminIntegrationServiceTests {
             didExecute = true
             completion(.success(()))
         }
-        let message = GarminInboundMessage(type: .callAction, actionId: "garmin_action_missing", correlationId: "c1")
+        let message = GarminInboundMessage(type: .callAction, id: "e_missing", correlationId: "c1")
         var handledResult: GarminCommandResult?
 
         service.handle(message, config: GarminConfig()) { result in
@@ -286,18 +243,165 @@ struct GarminIntegrationServiceTests {
         #expect(!didExecute)
     }
 
-    @Test func unsupportedActionFailsWithoutExecuting() throws {
+    @Test func customActionResolvesFromRootOverviewAfterRegistryReset() throws {
+        try withWebhookCapture { capturedRequests in
+            GarminOverviewActionRegistry.shared.clear()
+            let client = FakeGarminConnectIQClient()
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source }
+            )
+            let item = MagicItem(id: "scene.movie", serverId: "server-1", type: .scene, displayText: "Movie")
+            let message = GarminInboundMessage(
+                type: .callAction,
+                id: GarminConfig.opaqueItemId(for: item),
+                correlationId: "c1"
+            )
+
+            service.handle(message, config: customConfig(actionItems: [item])) { _ in }
+
+            let request = try #require(capturedRequests().first)
+            let data = try #require(request.data as? [String: Any])
+            #expect(data["domain"] as? String == "scene")
+            #expect(data["service"] as? String == "turn_on")
+        }
+    }
+
+    @Test func getSectionPrioritizesVisibleBuiltInStatusOverCustomStatusLimit() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let customItems = (0..<GarminConfig.maxSectionItems).map { index in
+            MagicItem(id: "sensor.custom_\(index)", serverId: "server-1", type: .entity)
+        }
+        let areaEntity = HAAppEntity(
+            id: "server-1-sensor.area_temperature",
+            entityId: "sensor.area_temperature",
+            serverId: "server-1",
+            domain: "sensor",
+            name: "Area temperature",
+            icon: nil,
+            rawDeviceClass: nil
+        )
+        let areaItem = MagicItem(id: areaEntity.entityId, serverId: areaEntity.serverId, type: .entity)
+        let config = customConfig(statusItems: customItems)
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [areaEntity] },
+            areaProvider: { _ in [
+                AppArea(
+                    id: "server-1-kitchen",
+                    serverId: "server-1",
+                    areaId: "kitchen",
+                    name: "Kitchen",
+                    aliases: [],
+                    picture: nil,
+                    icon: nil,
+                    sortOrder: nil,
+                    entities: [areaEntity.entityId]
+                ),
+            ] }
+        )
+        let snapshot = GarminStatusSnapshot(statuses: [
+            .init(id: GarminConfig.opaqueItemId(for: areaItem), label: "Area temperature", value: "21 C"),
+        ])
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { source }
+        )
+        service.setup(
+            configProvider: { config },
+            statusSnapshotProvider: { _, completion in completion(.success(snapshot)) }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.area("kitchen"),
+            correlationId: "o1"
+        ))
+
+        #expect(client.sentValuesDeltas.isEmpty)
+        #expect(client.sentSections.last?.section.values == [
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: areaItem.serverId, entityId: areaItem.id),
+                value: "21 C"
+            ),
+        ])
+    }
+
+    @Test func getSectionSetsRequestedSectionVisibleItemsBeforeSnapshot() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let areaEntity = HAAppEntity(
+            id: "server-1-sensor.area_temperature",
+            entityId: "sensor.area_temperature",
+            serverId: "server-1",
+            domain: "sensor",
+            name: "Area temperature",
+            icon: nil,
+            rawDeviceClass: nil
+        )
+        let areaItem = MagicItem(id: areaEntity.entityId, serverId: areaEntity.serverId, type: .entity)
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [areaEntity] },
+            areaProvider: { _ in [
+                AppArea(
+                    id: "server-1-kitchen",
+                    serverId: "server-1",
+                    areaId: "kitchen",
+                    name: "Kitchen",
+                    aliases: [],
+                    picture: nil,
+                    icon: nil,
+                    sortOrder: nil,
+                    entities: [areaEntity.entityId]
+                ),
+            ] }
+        )
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { source }
+        )
+        service.setup(
+            configProvider: { customConfig() },
+            statusSnapshotProvider: { _, completion in
+                let visibleIds = GarminOverviewVisibleEntityRegistry.shared.visibleStatusItems(limit: GarminConfig.maxSectionItems)
+                    .map { GarminConfig.opaqueItemId(for: $0) }
+                #expect(visibleIds == [GarminConfig.opaqueItemId(for: areaItem)])
+                completion(.success(GarminStatusSnapshot(statuses: [
+                    .init(id: GarminConfig.opaqueItemId(for: areaItem), label: "Area temperature", value: "21 C"),
+                ])))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.area("kitchen"),
+            correlationId: "o1"
+        ))
+
+        #expect(client.sentSections.last?.section.values == [
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: areaItem.serverId, entityId: areaItem.id),
+                value: "21 C"
+            ),
+        ])
+    }
+
+    @Test func nonActionCapableItemFailsAsMissingActionWithoutExecuting() throws {
         let client = FakeGarminConnectIQClient()
         var didExecute = false
         let item = MagicItem(id: "climate.hallway", serverId: "server-1", type: .entity)
-        let config = GarminConfig(actionItems: [item])
+        let config = customConfig(actionItems: [item])
         let service = GarminIntegrationService(client: client) { _, _, completion in
             didExecute = true
             completion(.success(()))
         }
         let message = GarminInboundMessage(
             type: .callAction,
-            actionId: GarminConfig.opaqueActionId(for: item),
+            id: GarminConfig.opaqueItemId(for: item),
             correlationId: "c1"
         )
         var handledResult: GarminCommandResult?
@@ -307,7 +411,7 @@ struct GarminIntegrationServiceTests {
         }
 
         #expect(handledResult?.state == .failed)
-        #expect(handledResult?.error == .unsupportedAction)
+        #expect(handledResult?.error == .missingAction)
         #expect(handledResult?.correlationId == "c1")
         #expect(!didExecute)
     }
@@ -316,13 +420,13 @@ struct GarminIntegrationServiceTests {
         try withServer(identifier: "server-1") { _ in
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client) { _, _, completion in
                 completion(.failure(.loginRequired))
             }
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
             var handledResult: GarminCommandResult?
@@ -337,19 +441,19 @@ struct GarminIntegrationServiceTests {
         }
     }
 
-    @Test func missingServerFailsWithoutExecuting() throws {
+    @Test func nonSelectedServerActionFailsAsMissingActionWithoutExecuting() throws {
         try withServer(identifier: "server-1") { _ in
             let client = FakeGarminConnectIQClient()
             var didExecute = false
             let item = MagicItem(id: "light.kitchen", serverId: "missing-server", type: .entity)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client) { _, _, completion in
                 didExecute = true
                 completion(.success(()))
             }
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
             var handledResult: GarminCommandResult?
@@ -359,7 +463,7 @@ struct GarminIntegrationServiceTests {
             }
 
             #expect(handledResult?.state == .failed)
-            #expect(handledResult?.error == .missingServer)
+            #expect(handledResult?.error == .missingAction)
             #expect(handledResult?.correlationId == "c1")
             #expect(!didExecute)
         }
@@ -369,13 +473,13 @@ struct GarminIntegrationServiceTests {
         try withServer(identifier: "server-1") { _ in
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client) { _, _, completion in
                 completion(.success(()))
             }
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
             var handledResult: GarminCommandResult?
@@ -395,11 +499,11 @@ struct GarminIntegrationServiceTests {
         try withWebhookCapture { capturedRequests in
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "script.good_night", serverId: "server-1", type: .script)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
 
@@ -419,11 +523,11 @@ struct GarminIntegrationServiceTests {
         try withWebhookCapture { capturedRequests in
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "scene.movie", serverId: "server-1", type: .scene)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
 
@@ -448,11 +552,11 @@ struct GarminIntegrationServiceTests {
             Current.setCachedApi(api, for: server.identifier)
 
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
 
@@ -475,11 +579,11 @@ struct GarminIntegrationServiceTests {
             Current.setCachedApi(api, for: server.identifier)
 
             let item = MagicItem(id: "cover.garage", serverId: "server-1", type: .entity)
-            let config = GarminConfig(actionItems: [item])
+            let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client)
             let message = GarminInboundMessage(
                 type: .callAction,
-                actionId: GarminConfig.opaqueActionId(for: item),
+                id: GarminConfig.opaqueItemId(for: item),
                 correlationId: "c1"
             )
 
@@ -496,7 +600,7 @@ struct GarminIntegrationServiceTests {
     @Test func inboundCallActionDoesNotContainConfirmedProtocolField() throws {
         let data = try JSONEncoder().encode(GarminInboundMessage(
             type: .callAction,
-            actionId: "garmin_action_1",
+            id: "e_1",
             correlationId: "c1"
         ))
         let payload = try #require(String(data: data, encoding: .utf8))
@@ -505,13 +609,24 @@ struct GarminIntegrationServiceTests {
         #expect(!payload.contains("confirmation_required"))
     }
 
-    @Test func syncSendsSanitizedProfile() throws {
+    @Test func syncDoesNotPushActiveSectionSnapshotAfterGetSection() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
         let client = FakeGarminConnectIQClient()
         let service = GarminIntegrationService(client: client)
-        let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity, displayText: "Kitchen")
+        let first = MagicItem(id: "script.first", serverId: "server-1", type: .script, displayText: "First")
+        let second = MagicItem(id: "script.second", serverId: "server-1", type: .script, displayText: "Second")
+        let initialConfig = customConfig(actionItems: [first])
         var didSync = false
 
-        service.sync(config: GarminConfig(actionItems: [item]), itemInfo: { _ in nil }) { result in
+        service.setup(configProvider: { initialConfig })
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.custom("custom-1"),
+            correlationId: "s1"
+        ))
+        client.sentSections.removeAll()
+
+        service.sync(config: customConfig(actionItems: [first, second]), itemInfo: { _ in nil }) { result in
             guard case .success = result else {
                 Issue.record("Expected sync success")
                 return
@@ -520,8 +635,23 @@ struct GarminIntegrationServiceTests {
         }
 
         #expect(didSync)
-        #expect(client.sentProfiles.count == 1)
-        #expect(client.sentProfiles.first?.actions.first?.label == "Kitchen")
+        #expect(client.sentSections.isEmpty)
+        #expect(client.sentSectionNotModifiedIds.isEmpty)
+        #expect(client.sentValuesDeltas.isEmpty)
+    }
+
+    private func customConfig(actionItems: [MagicItem] = [], statusItems: [MagicItem] = []) -> GarminConfig {
+        GarminConfig(
+            selectedServerId: "server-1",
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(
+                    id: "custom-1",
+                    title: "Quick",
+                    items: statusItems.map { GarminCustomSectionItem(item: $0) }
+                        + actionItems.map { GarminCustomSectionItem(item: $0) }
+                ),
+            ])]
+        )
     }
 
     private func withServer(

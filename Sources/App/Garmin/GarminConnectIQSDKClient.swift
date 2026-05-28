@@ -55,12 +55,28 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
         #endif
     }
 
-    func sendProfile(_ profile: GarminProfile, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
-        send(.init(type: .profileSync, profile: profile), completion: completion)
+    func sendSectionSnapshot(
+        _ section: GarminOverviewSection,
+        correlationId: String?,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        send(.init(type: .sectionSnapshot, correlationId: correlationId, section: section), completion: completion)
     }
 
-    func sendStatusSnapshot(_ snapshot: GarminStatusSnapshot, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
-        send(.init(type: .statusSnapshot, statusSnapshot: snapshot), completion: completion)
+    func sendSectionNotModified(
+        sectionId: String,
+        correlationId: String?,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        send(.init(type: .sectionNotModified, id: sectionId, correlationId: correlationId), completion: completion)
+    }
+
+    func sendValuesDelta(
+        _ values: [GarminOverviewValue],
+        valuesRevision: Int,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        send(.init(type: .valuesDelta, values: values, valuesRevision: valuesRevision), completion: completion)
     }
 
     func sendActionResult(
@@ -68,23 +84,6 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         send(.init(type: .actionResult, actionResult: result), completion: completion)
-    }
-
-    func sendConnectionStatus(
-        _ status: GarminConnectionStatus,
-        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
-    ) {
-        send(.init(type: .connectionStatus, connectionStatus: status)) { [weak self] result in
-            if case .success = result, status.state == .success {
-                #if GARMIN_CONNECTIQ_ENABLED
-                completion(self?.persistActiveAppIfPossible() ?? .failure(.watchUnavailable))
-                #else
-                completion(result)
-                #endif
-                return
-            }
-            completion(result)
-        }
     }
 
     func disconnect() {
@@ -135,14 +134,21 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
 
     private func send(_ message: GarminOutboundMessage, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
         do {
-            guard try GarminPayloadCodec.encodedByteCount(message) <= GarminPayloadLimits.outboundMessageBytes else {
+            let byteCount = try GarminPayloadCodec.encodedByteCount(message)
+            guard byteCount <= GarminPayloadLimits.outboundMessageBytes else {
+                updateDiagnostics(
+                    event: "tx:too_large",
+                    outboundBytes: byteCount,
+                    outboundType: message.type.rawValue,
+                    sdkResult: GarminIntegrationError.payloadTooLarge.rawValue
+                )
                 completion(.failure(.payloadTooLarge))
                 return
             }
             let payload = try GarminPayloadCodec.encodeOutboundDictionary(message)
             updateDiagnostics(
                 event: "tx:encoded",
-                outboundBytes: try GarminPayloadCodec.encodedByteCount(message),
+                outboundBytes: byteCount,
                 outboundType: message.type.rawValue,
                 sdkResult: nil
             )
@@ -159,7 +165,7 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
             updateDiagnostics(
                 event: "tx:noapp",
                 outboundBytes: payloadByteCount(payload),
-                outboundType: payload["type"] as? String,
+                outboundType: payload["t"] as? String,
                 sdkResult: "no_active_app"
             )
             requestDeviceSelectionIfNeeded(force: false)
@@ -169,14 +175,14 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
         updateDiagnostics(
             event: "tx:queued",
             outboundBytes: payloadByteCount(payload),
-            outboundType: payload["type"] as? String,
+            outboundType: payload["t"] as? String,
             sdkResult: nil
         )
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             self?.updateDiagnostics(
                 event: "tx:send",
                 outboundBytes: self?.payloadByteCount(payload) ?? 0,
-                outboundType: payload["type"] as? String,
+                outboundType: payload["t"] as? String,
                 sdkResult: nil
             )
             self?.connectIQ.sendMessage(payload, to: activeApp, progress: nil) { [weak self] result in
@@ -191,7 +197,7 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
                 self?.updateDiagnostics(
                     event: event,
                     outboundBytes: self?.payloadByteCount(payload) ?? 0,
-                    outboundType: payload["type"] as? String,
+                    outboundType: payload["t"] as? String,
                     sdkResult: NSStringFromSendMessageResult(result) ?? "unknown"
                 )
                 if case let .failure(error) = mappedResult {
@@ -237,7 +243,7 @@ extension GarminConnectIQSDKClient: IQDeviceEventDelegate, IQAppMessageDelegate 
     func receivedMessage(_ message: Any!, from app: IQApp!) {
         guard let app else { return }
         let inboundBytes = payloadByteCount(message)
-        let inboundType = (message as? [String: Any])?["type"] as? String
+        let inboundType = (message as? [String: Any])?["t"] as? String
         updateDiagnostics(event: "rx:start", inboundBytes: inboundBytes, inboundType: inboundType)
         guard isExpected(app: app) else {
             updateDiagnostics(event: "rx:unexpected", inboundBytes: inboundBytes, inboundType: inboundType)
@@ -248,12 +254,6 @@ extension GarminConnectIQSDKClient: IQDeviceEventDelegate, IQAppMessageDelegate 
             ])
             return
         }
-        activeApp = app
-        activeDevice = app.device
-        if !state.isReady {
-            state = .waitingForWatch(deviceName: app.device.friendlyName ?? app.device.modelName)
-        }
-
         guard let payload = message as? [String: Any],
               (try? JSONSerialization.data(withJSONObject: payload).count) ?? Int.max <= GarminPayloadLimits.inboundCommandBytes else {
             updateDiagnostics(event: "rx:bad", inboundBytes: inboundBytes, inboundType: inboundType)
@@ -267,7 +267,7 @@ extension GarminConnectIQSDKClient: IQDeviceEventDelegate, IQAppMessageDelegate 
         do {
             let decoded = try GarminPayloadCodec.decodeInboundDictionary(payload)
             updateDiagnostics(event: "rx:decoded", inboundBytes: inboundBytes, inboundType: decoded.type.rawValue)
-            recordLastCommunicationIfConfigured(app: app)
+            persistObservedAppCommunication(app: app)
             commandHandler?(decoded)
         } catch {
             updateDiagnostics(event: "rx:bad", inboundBytes: inboundBytes, inboundType: inboundType)
@@ -418,16 +418,20 @@ private extension GarminConnectIQSDKClient {
         return app.device.uuid.uuidString == expectedDeviceIdentifier
     }
 
-    func persistActiveAppIfPossible() -> Result<Void, GarminIntegrationError> {
-        guard let activeApp else { return .failure(.watchUnavailable) }
-        let deviceName = displayName(for: activeApp.device)
+    func persistObservedAppCommunication(app: IQApp) {
+        activeApp = app
+        activeDevice = app.device
+        let deviceName = displayName(for: app.device)
         let readyState: GarminConnectionState = .ready(deviceName: deviceName)
 
         do {
             try Current.database().write { db in
                 var config = try GarminConfig.fetchOne(db) ?? GarminConfig()
-                config.deviceIdentifier = activeApp.device.uuid.uuidString
-                config.appIdentifier = activeApp.uuid.uuidString
+                if config.selectedServerId == nil {
+                    config.selectedServerId = Current.servers.all.first?.identifier.rawValue
+                }
+                config.deviceIdentifier = app.device.uuid.uuidString
+                config.appIdentifier = app.uuid.uuidString
                 config.deviceName = deviceName
                 config.lastCommunicationTimestamp = Current.date().timeIntervalSince1970
                 config.lastError = nil
@@ -439,31 +443,9 @@ private extension GarminConnectIQSDKClient {
                 "sdk_state": "paired",
                 "connection_state": GarminDiagnostics.connectionState(state),
             ])
-            return .success(())
         } catch {
             GarminDiagnostics.record(.sdk, status: .failed, metadata: [
-                "sdk_state": "pair_persist_failed",
-                "connection_state": GarminDiagnostics.connectionState(state),
-                "error_code": GarminIntegrationError.commandFailed.rawValue,
-            ])
-            return .failure(.commandFailed)
-        }
-    }
-
-    func recordLastCommunicationIfConfigured(app: IQApp) {
-        do {
-            try Current.database().write { db in
-                guard var config = try GarminConfig.fetchOne(db),
-                      config.deviceIdentifier == app.device.uuid.uuidString else {
-                    return
-                }
-                config.deviceName = displayName(for: app.device)
-                config.lastCommunicationTimestamp = Current.date().timeIntervalSince1970
-                try config.insert(db, onConflict: .replace)
-            }
-        } catch {
-            GarminDiagnostics.record(.sdk, status: .failed, metadata: [
-                "sdk_state": "last_communication_persist_failed",
+                "sdk_state": "communication_persist_failed",
                 "connection_state": GarminDiagnostics.connectionState(state),
                 "error_code": GarminIntegrationError.commandFailed.rawValue,
             ])
