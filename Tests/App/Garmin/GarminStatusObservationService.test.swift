@@ -397,7 +397,7 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
         stateSubject.eraseToAnyPublisher()
     }
     private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
-    var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int)] = []
+    var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int, isTransient: Bool)] = []
     var sentResults: [GarminCommandResult] = []
 
     private let automaticallyCompleteSends: Bool
@@ -412,9 +412,10 @@ private final class RecordingGarminStatusClient: GarminConnectIQClient {
     func sendValuesDelta(
         _ values: [GarminOverviewValue],
         valuesRevision: Int,
+        isTransient: Bool,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
-        sentValuesDeltas.append((values: values, revision: valuesRevision))
+        sentValuesDeltas.append((values: values, revision: valuesRevision, isTransient: isTransient))
         if automaticallyCompleteSends {
             completion(.success(()))
         } else {

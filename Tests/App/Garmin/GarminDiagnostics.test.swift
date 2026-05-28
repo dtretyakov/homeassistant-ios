@@ -244,6 +244,7 @@ private final class DiagnosticsGarminClient: GarminConnectIQClient {
     func sendValuesDelta(
         _ values: [GarminOverviewValue],
         valuesRevision: Int,
+        isTransient: Bool,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         completion(valuesSendResult)

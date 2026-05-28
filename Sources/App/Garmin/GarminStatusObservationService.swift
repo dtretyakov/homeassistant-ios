@@ -308,7 +308,7 @@ final class GarminStatusObservationService {
             return
         }
 
-        client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next()) { [weak self] result in
+        client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next(), isTransient: true) { [weak self] result in
             self?.workQueue.async {
                 guard let self, self.sendGeneration == generation else { return }
 

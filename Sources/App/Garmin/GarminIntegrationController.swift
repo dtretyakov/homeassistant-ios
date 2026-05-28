@@ -88,11 +88,25 @@ final class GarminIntegrationController: GarminIntegrationControlling {
                 completion(result)
             }
         }
+        let sectionSnapshotProvider: GarminIntegrationService.StatusSnapshotProvider = { [statusSnapshotService, magicItemProvider] config, items, cacheOnly, completion in
+            if cacheOnly {
+                completion(statusSnapshotService.cachedSnapshot(config: config, items: items))
+                return
+            }
+            Task {
+                let result = await statusSnapshotService.snapshotWithCacheFallback(
+                    config: config,
+                    itemInfo: { magicItemProvider.getInfo(for: $0) },
+                    items: items
+                )
+                completion(result)
+            }
+        }
 
         integrationService.setup(
             configProvider: { try? GarminConfig.config() },
             itemInfoProvider: { [magicItemProvider] in magicItemProvider.getInfo(for: $0) },
-            statusSnapshotProvider: statusSnapshotProvider
+            statusSnapshotProvider: sectionSnapshotProvider
         )
 
         let observationService = GarminStatusObservationService(

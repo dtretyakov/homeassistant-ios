@@ -9,6 +9,8 @@ final class GarminIntegrationService {
     typealias ItemInfoProvider = (MagicItem) -> MagicItem.Info?
     typealias StatusSnapshotProvider = (
         GarminConfig,
+        [MagicItem],
+        Bool,
         @escaping (Swift.Result<GarminStatusSnapshot, GarminIntegrationError>) -> Void
     ) -> Void
     typealias OverviewSourceProvider = () -> GarminHomeOverviewSource
@@ -127,9 +129,10 @@ final class GarminIntegrationService {
 
         let overviewSource = overviewSourceProvider()
         let itemInfo = currentItemInfoProvider ?? { _ in nil }
+        let visibleValueItems: [MagicItem]
 
         do {
-            let visibleValueItems = try overviewSource.valueItems(
+            visibleValueItems = try overviewSource.valueItems(
                 id: sectionId,
                 config: config,
                 itemInfo: itemInfo
@@ -140,58 +143,84 @@ final class GarminIntegrationService {
             return
         }
 
-        sectionValues(config: config) { [weak self] valuesById in
-            guard let self else { return }
-            do {
-                guard let section = try overviewSource.section(
-                    id: sectionId,
+        do {
+            guard let section = try overviewSource.section(
+                id: sectionId,
+                config: config,
+                itemInfo: itemInfo,
+                valueProvider: { _ in nil }
+            ) else {
+                send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
+                return
+            }
+
+            let completeAndRefreshValues: (Swift.Result<Void, GarminIntegrationError>) -> Void = { [weak self] result in
+                guard let self else { return }
+                self.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
+                guard case .success = result else { return }
+                self.refreshValues(
+                    for: visibleValueItems,
                     config: config,
-                    itemInfo: itemInfo,
-                    valueProvider: { valuesById[$0.id] }
-                ) else {
-                    self.send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
-                    return
-                }
-                if message.etag == section.etag {
-                    self.client.sendSectionNotModified(sectionId: section.id, correlationId: message.correlationId) { [weak self] result in
-                        guard let self else { return }
-                        guard case .success = result else {
-                            self.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
-                            return
-                        }
-                        self.sendValuesIfNeeded(section.values, correlationId: message.correlationId, completion: completion)
-                    }
-                } else {
-                    self.client.sendSectionSnapshot(section, correlationId: message.correlationId) { [weak self] result in
-                        self?.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
-                    }
-                }
-            } catch {
-                self.send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
+                    correlationId: message.correlationId
+                )
+            }
+
+            if message.etag == section.etag {
+                client.sendSectionNotModified(
+                    sectionId: section.id,
+                    correlationId: message.correlationId,
+                    completion: completeAndRefreshValues
+                )
+            } else {
+                client.sendSectionSnapshot(
+                    section,
+                    correlationId: message.correlationId,
+                    completion: completeAndRefreshValues
+                )
+            }
+        } catch {
+            send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
+        }
+    }
+
+    private func refreshValues(
+        for items: [MagicItem],
+        config: GarminConfig,
+        correlationId: String?
+    ) {
+        let valueItems = Array(items
+            .filter(GarminSupportedDomains.supportsStatus)
+            .prefix(GarminConfig.maxSectionItems))
+        guard !valueItems.isEmpty, let currentStatusSnapshotProvider else {
+            return
+        }
+
+        currentStatusSnapshotProvider(config, valueItems, true) { [weak self] cachedResult in
+            guard let self else { return }
+            let cachedValues = self.overviewValues(result: cachedResult, items: valueItems)
+            if !cachedValues.isEmpty {
+                self.sendValuesIfNeeded(cachedValues, correlationId: correlationId) { _ in }
+            }
+
+            currentStatusSnapshotProvider(config, valueItems, false) { [weak self] freshResult in
+                guard let self else { return }
+                let freshValues = self.overviewValues(result: freshResult, items: valueItems)
+                guard !freshValues.isEmpty, freshValues != cachedValues else { return }
+                self.sendValuesIfNeeded(freshValues, correlationId: correlationId) { _ in }
             }
         }
     }
 
-    private func sectionValues(
-        config: GarminConfig,
-        completion: @escaping ([String: String]) -> Void
-    ) {
-        guard let currentStatusSnapshotProvider else {
-            completion([:])
-            return
-        }
-
-        currentStatusSnapshotProvider(config) { result in
-            guard case let .success(snapshot) = result else {
-                completion([:])
-                return
-            }
-
-            var values: [String: String] = [:]
-            snapshot.statuses.forEach { status in
-                values[status.id] = status.value
-            }
-            completion(values)
+    private func overviewValues(
+        result: Swift.Result<GarminStatusSnapshot, GarminIntegrationError>,
+        items: [MagicItem]
+    ) -> [GarminOverviewValue] {
+        guard case let .success(snapshot) = result else { return [] }
+        let valuesById = Dictionary(uniqueKeysWithValues: snapshot.statuses.map { ($0.id, $0.value) })
+        return items.compactMap { item in
+            let id = GarminConfig.opaqueItemId(for: item)
+            guard let value = valuesById[id] else { return nil }
+            return GarminOverviewValue(id: id, value: value)
         }
     }
 
@@ -216,7 +245,7 @@ final class GarminIntegrationService {
             completion(.init(correlationId: correlationId, state: .success))
             return
         }
-        client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next()) { [weak self] result in
+        client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next(), isTransient: true) { [weak self] result in
             self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
         }
     }

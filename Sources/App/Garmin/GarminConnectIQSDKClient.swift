@@ -37,6 +37,7 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
     private var isInitialized = false
     private var hasRequestedDeviceSelection = false
     private var stateBeforeDeviceSelection: GarminConnectionState?
+    private let outboundQueue = GarminOutboundMessageQueue()
     #endif
 
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void) {
@@ -74,9 +75,10 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
     func sendValuesDelta(
         _ values: [GarminOverviewValue],
         valuesRevision: Int,
+        isTransient: Bool,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
-        send(.init(type: .valuesDelta, values: values, valuesRevision: valuesRevision), completion: completion)
+        send(.init(type: .valuesDelta, values: values, valuesRevision: valuesRevision), isTransient: isTransient, completion: completion)
     }
 
     func sendActionResult(
@@ -98,6 +100,9 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
         }
         activeApp = nil
         activeDevice = nil
+        outboundQueue
+            .cancelAll()
+            .forEach { $0.complete(.failure(.watchUnavailable)) }
         #endif
     }
 
@@ -132,7 +137,11 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
         #endif
     }
 
-    private func send(_ message: GarminOutboundMessage, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
+    private func send(
+        _ message: GarminOutboundMessage,
+        isTransient: Bool = false,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
         do {
             let byteCount = try GarminPayloadCodec.encodedByteCount(message)
             guard byteCount <= GarminPayloadLimits.outboundMessageBytes else {
@@ -145,48 +154,96 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
                 completion(.failure(.payloadTooLarge))
                 return
             }
-            let payload = try GarminPayloadCodec.encodeOutboundDictionary(message)
             updateDiagnostics(
                 event: "tx:encoded",
                 outboundBytes: byteCount,
                 outboundType: message.type.rawValue,
                 sdkResult: nil
             )
-            send(payload, completion: completion)
+            enqueue(message, isTransient: isTransient, completion: completion)
         } catch {
             updateDiagnostics(event: "tx:bad", sdkResult: "encode_failed")
             completion(.failure(.commandFailed))
         }
     }
 
-    private func send(_ payload: [String: Any], completion: @escaping (Result<Void, GarminIntegrationError>) -> Void) {
+    private func enqueue(
+        _ message: GarminOutboundMessage,
+        isTransient: Bool,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
         #if GARMIN_CONNECTIQ_ENABLED
+        let enqueueBlock = { [weak self] in
+            guard let self else { return }
+            self.outboundQueue.enqueue(message: message, isTransient: isTransient, completion: completion)
+            self.updateDiagnostics(
+                event: "tx:queued",
+                outboundBytes: (try? GarminPayloadCodec.encodedByteCount(message)) ?? 0,
+                outboundType: message.type.rawValue,
+                sdkResult: nil
+            )
+            self.processOutboundQueue()
+        }
+        if Thread.isMainThread {
+            enqueueBlock()
+        } else {
+            DispatchQueue.main.async(execute: enqueueBlock)
+        }
+        #else
+        completion(.failure(.sdkUnavailable))
+        #endif
+    }
+
+    #if GARMIN_CONNECTIQ_ENABLED
+    private func processOutboundQueue() {
         guard let activeApp else {
+            let queuedMessages = outboundQueue.cancelAll()
             updateDiagnostics(
                 event: "tx:noapp",
-                outboundBytes: payloadByteCount(payload),
-                outboundType: payload["t"] as? String,
+                outboundBytes: 0,
+                outboundType: queuedMessages.first?.message.type.rawValue,
                 sdkResult: "no_active_app"
             )
             requestDeviceSelectionIfNeeded(force: false)
-            completion(.failure(error(for: state)))
+            queuedMessages.forEach { $0.complete(.failure(error(for: state))) }
             return
         }
+
+        guard let queuedMessage = outboundQueue.startNext() else { return }
+        let payload: [String: Any]
+        do {
+            let byteCount = try GarminPayloadCodec.encodedByteCount(queuedMessage.message)
+            guard byteCount <= GarminPayloadLimits.outboundMessageBytes else {
+                updateDiagnostics(
+                    event: "tx:too_large",
+                    outboundBytes: byteCount,
+                    outboundType: queuedMessage.message.type.rawValue,
+                    sdkResult: GarminIntegrationError.payloadTooLarge.rawValue
+                )
+                queuedMessage.complete(.failure(.payloadTooLarge))
+                outboundQueue.finishCurrent()
+                processOutboundQueue()
+                return
+            }
+            payload = try GarminPayloadCodec.encodeOutboundDictionary(queuedMessage.message)
+        } catch {
+            updateDiagnostics(event: "tx:bad", sdkResult: "encode_failed")
+            queuedMessage.complete(.failure(.commandFailed))
+            outboundQueue.finishCurrent()
+            processOutboundQueue()
+            return
+        }
+
         updateDiagnostics(
-            event: "tx:queued",
+            event: "tx:send",
             outboundBytes: payloadByteCount(payload),
             outboundType: payload["t"] as? String,
             sdkResult: nil
         )
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.updateDiagnostics(
-                event: "tx:send",
-                outboundBytes: self?.payloadByteCount(payload) ?? 0,
-                outboundType: payload["t"] as? String,
-                sdkResult: nil
-            )
-            self?.connectIQ.sendMessage(payload, to: activeApp, progress: nil) { [weak self] result in
-                let mappedResult = self?.result(for: result) ?? .failure(.watchUnavailable)
+        connectIQ.sendMessage(payload, to: activeApp, progress: nil, completion: { [weak self] result in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let mappedResult = self.result(for: result)
                 let event: String
                 switch mappedResult {
                 case .success:
@@ -194,25 +251,108 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
                 case .failure:
                     event = "tx:error"
                 }
-                self?.updateDiagnostics(
+                self.updateDiagnostics(
                     event: event,
-                    outboundBytes: self?.payloadByteCount(payload) ?? 0,
+                    outboundBytes: self.payloadByteCount(payload),
                     outboundType: payload["t"] as? String,
                     sdkResult: NSStringFromSendMessageResult(result) ?? "unknown"
                 )
                 if case let .failure(error) = mappedResult {
                     GarminDiagnostics.record(.sdk, status: .failed, metadata: [
                         "sdk_state": NSStringFromSendMessageResult(result) ?? "unknown",
-                        "connection_state": GarminDiagnostics.connectionState(self?.state ?? .notConfigured),
+                        "connection_state": GarminDiagnostics.connectionState(self.state),
                         "error_code": error.rawValue,
                     ])
                 }
-                completion(mappedResult)
+                queuedMessage.complete(mappedResult)
+                self.outboundQueue.finishCurrent()
+                self.processOutboundQueue()
+            }
+        }, isTransient: queuedMessage.isTransient)
+    }
+    #endif
+}
+
+final class GarminOutboundMessageQueue {
+    private var pending: [QueuedOutboundMessage] = []
+    private var current: QueuedOutboundMessage?
+
+    func enqueue(
+        message: GarminOutboundMessage,
+        isTransient: Bool,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        if isTransient, message.type == .valuesDelta {
+            coalesceQueuedValues(message, completion: completion)
+        } else {
+            pending.append(.init(message: message, isTransient: isTransient, completions: [completion]))
+        }
+    }
+
+    func startNext() -> QueuedOutboundMessage? {
+        guard current == nil, !pending.isEmpty else { return nil }
+        let queuedMessage = pending.removeFirst()
+        current = queuedMessage
+        return queuedMessage
+    }
+
+    func finishCurrent() {
+        current = nil
+    }
+
+    @discardableResult
+    func cancelAll() -> [QueuedOutboundMessage] {
+        let queuedMessages = [current].compactMap { $0 } + pending
+        current = nil
+        pending.removeAll()
+        return queuedMessages
+    }
+
+    private func coalesceQueuedValues(
+        _ message: GarminOutboundMessage,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        guard let index = pending.indices.last,
+              pending[index].isTransient,
+              pending[index].message.type == .valuesDelta else {
+            pending.append(.init(message: message, isTransient: true, completions: [completion]))
+            return
+        }
+
+        let existing = pending[index]
+        let existingValues = existing.message.values ?? []
+        let incomingValues = message.values ?? []
+        var valuesById: [String: GarminOverviewValue] = [:]
+        existingValues.forEach { valuesById[$0.id] = $0 }
+        incomingValues.forEach { valuesById[$0.id] = $0 }
+
+        var orderedIds: [String] = []
+        (existingValues + incomingValues).forEach { value in
+            if !orderedIds.contains(value.id) {
+                orderedIds.append(value.id)
             }
         }
-        #else
-        completion(.failure(.sdkUnavailable))
-        #endif
+
+        let coalescedMessage = GarminOutboundMessage(
+            type: .valuesDelta,
+            values: orderedIds.compactMap { valuesById[$0] },
+            valuesRevision: max(existing.message.valuesRevision ?? 0, message.valuesRevision ?? 0)
+        )
+        pending[index] = .init(
+            message: coalescedMessage,
+            isTransient: true,
+            completions: existing.completions + [completion]
+        )
+    }
+}
+
+struct QueuedOutboundMessage {
+    let message: GarminOutboundMessage
+    let isTransient: Bool
+    let completions: [(Result<Void, GarminIntegrationError>) -> Void]
+
+    func complete(_ result: Result<Void, GarminIntegrationError>) {
+        completions.forEach { $0(result) }
     }
 }
 

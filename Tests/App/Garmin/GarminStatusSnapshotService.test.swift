@@ -160,7 +160,7 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let snapshot = try result.get()
-            #expect(snapshot == cachedSnapshot)
+            #expect(snapshot.statuses == cachedSnapshot.statuses)
         }
     }
 
@@ -199,11 +199,11 @@ struct GarminStatusSnapshotServiceTests {
             pendingRequest.completion(.failure(.internal(debugDescription: "unit-test")))
 
             let snapshot = try await resultTask.value.get()
-            #expect(snapshot == cachedSnapshot)
+            #expect(snapshot.statuses == cachedSnapshot.statuses)
         }
     }
 
-    @Test func snapshotWithCacheFallbackRejectsMismatchedCachedSnapshot() async throws {
+    @Test func snapshotWithCacheFallbackIgnoresMismatchedCacheAndReturnsFreshUnavailableValue() async throws {
         try GarminStatusSnapshotCache.clear()
         let cachedSnapshot = GarminStatusSnapshot(
             statuses: [.init(id: "garmin_status_cached", label: "Cached", value: "Stale")],
@@ -222,15 +222,13 @@ struct GarminStatusSnapshotServiceTests {
                 itemInfo: { _ in nil }
             )
 
-            guard case let .failure(error) = result else {
-                Issue.record("Expected mismatched cache to be rejected")
-                return
-            }
-            #expect(error == .homeAssistantUnavailable)
+            let snapshot = try result.get()
+            #expect(snapshot.statuses.map(\.id) == [GarminConfig.opaqueItemId(for: item)])
+            #expect(snapshot.statuses.map(\.value) == ["Unavailable"])
         }
     }
 
-    @Test func snapshotWithCacheFallbackReturnsErrorWhenFreshAndCacheFail() async throws {
+    @Test func snapshotWithCacheFallbackReturnsUnavailableValuesWhenFreshFailsWithoutCache() async throws {
         try GarminStatusSnapshotCache.clear()
         try await withServer(identifier: "server-1") {
             let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
@@ -243,11 +241,216 @@ struct GarminStatusSnapshotServiceTests {
                 itemInfo: { _ in nil }
             )
 
-            guard case let .failure(error) = result else {
-                Issue.record("Expected snapshot failure when no fresh or cached snapshot exists")
-                return
+            let snapshot = try result.get()
+            #expect(snapshot.statuses.map(\.value) == ["Unavailable"])
+        }
+    }
+
+    @Test func snapshotReturnsUnavailableForFailedEntityWithoutFailingWholeSnapshot() async throws {
+        try GarminStatusSnapshotCache.clear()
+        try await withServer(identifier: "server-1") {
+            let first = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+            let second = MagicItem(id: "sensor.humidity", serverId: "server-1", type: .entity, displayText: "Humidity")
+            let service = GarminStatusSnapshotService(
+                stateProvider: { item, _ in
+                    if item.id == second.id {
+                        throw GarminIntegrationError.homeAssistantUnavailable
+                    }
+                    return .init(value: "22", unitOfMeasurement: "°C", domainState: nil)
+                }
+            )
+
+            let snapshot = try await service.snapshot(
+                config: config(statusItems: [first, second]),
+                itemInfo: { _ in nil }
+            )
+
+            #expect(snapshot.statuses.map(\.value) == ["22 °C", "Unavailable"])
+        }
+    }
+
+    @Test func parallelSnapshotPreservesInputOrder() async throws {
+        try GarminStatusSnapshotCache.clear()
+        try await withServer(identifier: "server-1") {
+            let items = (0..<GarminConfig.maxStatusItems).map { index in
+                MagicItem(
+                    id: "sensor.value_\(index)",
+                    serverId: "server-1",
+                    type: .entity,
+                    displayText: "Value \(index)"
+                )
             }
-            #expect(error == .homeAssistantUnavailable)
+            let service = GarminStatusSnapshotService(
+                stateProvider: { item, _ in
+                    let index = Int(item.id.replacingOccurrences(of: "sensor.value_", with: "")) ?? 0
+                    try await Task.sleep(nanoseconds: UInt64(GarminConfig.maxStatusItems - index) * 1_000_000)
+                    return .init(value: "\(index)", unitOfMeasurement: nil, domainState: nil)
+                }
+            )
+
+            let snapshot = try await service.snapshot(
+                config: config(statusItems: items),
+                itemInfo: { _ in nil }
+            )
+
+            #expect(snapshot.statuses.map(\.id) == items.map { GarminConfig.opaqueItemId(for: $0) })
+            #expect(snapshot.statuses.map(\.value) == (0..<GarminConfig.maxStatusItems).map(String.init))
+        }
+    }
+
+    @Test func cachedSnapshotReturnsCacheWithoutCallingStateProvider() async throws {
+        try GarminStatusSnapshotCache.clear()
+        let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+        let statusIds = GarminStatusSnapshotService.statusIds(for: [item])
+        let cachedSnapshot = GarminStatusSnapshot(
+            statuses: [.init(id: GarminConfig.opaqueItemId(for: item), label: "Temp", value: "20 °C")],
+            updatedAt: 1_710_000_006
+        )
+        try GarminStatusSnapshotCache.save(cachedSnapshot, statusIds: statusIds)
+        let service = GarminStatusSnapshotService(
+            stateProvider: { _, _ in
+                Issue.record("Cache-only snapshot should not call state provider")
+                return nil
+            }
+        )
+
+        let result = service.cachedSnapshot(config: config(statusItems: [item]), items: [item])
+
+        #expect(try result.get() == cachedSnapshot)
+    }
+
+    @Test func targetedFreshSaveDoesNotDestroyOtherCachedValues() throws {
+        try GarminStatusSnapshotCache.clear()
+        let first = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+        let second = MagicItem(id: "sensor.humidity", serverId: "server-1", type: .entity, displayText: "Humidity")
+        let firstId = GarminConfig.opaqueItemId(for: first)
+        let secondId = GarminConfig.opaqueItemId(for: second)
+        try GarminStatusSnapshotCache.save(
+            GarminStatusSnapshot(statuses: [
+                .init(id: firstId, label: "Temp", value: "20 °C"),
+                .init(id: secondId, label: "Humidity", value: "40%"),
+            ], updatedAt: 1_710_000_007),
+            statusIds: [firstId, secondId]
+        )
+        try GarminStatusSnapshotCache.save(
+            GarminStatusSnapshot(statuses: [
+                .init(id: firstId, label: "Temp", value: "21 °C"),
+            ], updatedAt: 1_710_000_008),
+            statusIds: [firstId]
+        )
+
+        let cachedSnapshot = try #require(try GarminStatusSnapshotCache.cachedSnapshot(statusIds: [firstId, secondId]))
+
+        #expect(cachedSnapshot.statuses.map(\.id) == [firstId, secondId])
+        #expect(cachedSnapshot.statuses.map(\.value) == ["21 °C", "40%"])
+    }
+
+    @Test func cachedSnapshotReturnsPartialValuesInRequestedOrder() throws {
+        try GarminStatusSnapshotCache.clear()
+        let first = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+        let second = MagicItem(id: "sensor.humidity", serverId: "server-1", type: .entity, displayText: "Humidity")
+        let firstId = GarminConfig.opaqueItemId(for: first)
+        let secondId = GarminConfig.opaqueItemId(for: second)
+        try GarminStatusSnapshotCache.save(
+            GarminStatusSnapshot(statuses: [
+                .init(id: firstId, label: "Temp", value: "20 °C"),
+            ]),
+            statusIds: [firstId]
+        )
+
+        let cachedSnapshot = try #require(try GarminStatusSnapshotCache.cachedSnapshot(statusIds: [secondId, firstId]))
+
+        #expect(cachedSnapshot.statuses.map(\.id) == [firstId])
+        #expect(cachedSnapshot.statuses.map(\.value) == ["20 °C"])
+    }
+
+    @Test func cachedSnapshotReadsLegacySingletonWhenItemRowsAreMissing() throws {
+        try GarminStatusSnapshotCache.clear()
+        let item = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+        let statusId = GarminConfig.opaqueItemId(for: item)
+        let legacySnapshot = GarminStatusSnapshot(
+            statuses: [.init(id: statusId, label: "Temp", value: "20 °C")],
+            updatedAt: 1_710_000_009
+        )
+        try GarminDatabaseSchema.createIfNeeded()
+        try Current.database().write { db in
+            try GarminStatusSnapshotCache(
+                id: GarminStatusSnapshotCache.cacheId,
+                statusIds: [statusId],
+                snapshot: legacySnapshot
+            ).save(db)
+        }
+
+        let cachedSnapshot = try #require(try GarminStatusSnapshotCache.cachedSnapshot(statusIds: [statusId]))
+
+        #expect(cachedSnapshot == legacySnapshot)
+    }
+
+    @Test func snapshotWithCacheFallbackMergesFailedRowsOnly() async throws {
+        try GarminStatusSnapshotCache.clear()
+        try await withServer(identifier: "server-1") {
+            let first = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+            let second = MagicItem(id: "sensor.humidity", serverId: "server-1", type: .entity, displayText: "Humidity")
+            let firstId = GarminConfig.opaqueItemId(for: first)
+            let secondId = GarminConfig.opaqueItemId(for: second)
+            try GarminStatusSnapshotCache.save(
+                GarminStatusSnapshot(statuses: [
+                    .init(id: firstId, label: "Temp", value: "20 °C"),
+                ], updatedAt: 1_710_000_010),
+                statusIds: [firstId]
+            )
+            let service = GarminStatusSnapshotService(
+                stateProvider: { _, _ in throw GarminIntegrationError.homeAssistantUnavailable },
+                dateProvider: { Date(timeIntervalSince1970: 1_710_000_011) }
+            )
+
+            let result = await service.snapshotWithCacheFallback(
+                config: config(statusItems: [first, second]),
+                itemInfo: { _ in nil }
+            )
+
+            let snapshot = try result.get()
+            #expect(snapshot.statuses.map(\.id) == [firstId, secondId])
+            #expect(snapshot.statuses.map(\.value) == ["20 °C", "Unavailable"])
+            #expect(snapshot.updatedAt == 1_710_000_011)
+        }
+    }
+
+    @Test func snapshotWithCacheFallbackUpdatesSuccessfulFreshRowsWhenOtherRowsFail() async throws {
+        try GarminStatusSnapshotCache.clear()
+        try await withServer(identifier: "server-1") {
+            let first = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temp")
+            let second = MagicItem(id: "sensor.humidity", serverId: "server-1", type: .entity, displayText: "Humidity")
+            let firstId = GarminConfig.opaqueItemId(for: first)
+            let secondId = GarminConfig.opaqueItemId(for: second)
+            let statusIds = [firstId, secondId]
+            try GarminStatusSnapshotCache.save(
+                GarminStatusSnapshot(statuses: [
+                    .init(id: firstId, label: "Temp", value: "20 °C"),
+                    .init(id: secondId, label: "Humidity", value: "40%"),
+                ], updatedAt: 1_710_000_012),
+                statusIds: statusIds
+            )
+            let service = GarminStatusSnapshotService(
+                stateProvider: { item, _ in
+                    if item.id == second.id {
+                        throw GarminIntegrationError.homeAssistantUnavailable
+                    }
+                    return .init(value: "21", unitOfMeasurement: "°C", domainState: nil)
+                },
+                dateProvider: { Date(timeIntervalSince1970: 1_710_000_013) }
+            )
+
+            let result = await service.snapshotWithCacheFallback(
+                config: config(statusItems: [first, second]),
+                itemInfo: { _ in nil }
+            )
+
+            let snapshot = try result.get()
+            #expect(snapshot.statuses.map(\.value) == ["21 °C", "40%"])
+
+            let cachedSnapshot = try #require(try GarminStatusSnapshotCache.cachedSnapshot(statusIds: statusIds))
+            #expect(cachedSnapshot.statuses.map(\.value) == ["21 °C", "40%"])
         }
     }
 

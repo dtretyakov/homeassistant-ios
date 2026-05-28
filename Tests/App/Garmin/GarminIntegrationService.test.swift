@@ -19,7 +19,7 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
     var sentResults: [GarminCommandResult] = []
     var sentSections: [(section: GarminOverviewSection, correlationId: String?)] = []
     var sentSectionNotModifiedIds: [(sectionId: String, correlationId: String?)] = []
-    var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int)] = []
+    var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int, isTransient: Bool)] = []
     var didRequestDeviceSelection = false
     private var commandHandler: ((GarminInboundMessage) -> Void)?
 
@@ -48,9 +48,10 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
     func sendValuesDelta(
         _ values: [GarminOverviewValue],
         valuesRevision: Int,
+        isTransient: Bool,
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
-        sentValuesDeltas.append((values: values, revision: valuesRevision))
+        sentValuesDeltas.append((values: values, revision: valuesRevision, isTransient: isTransient))
         completion(.success(()))
     }
 
@@ -202,7 +203,14 @@ struct GarminIntegrationServiceTests {
         )
         service.setup(
             configProvider: { config },
-            statusSnapshotProvider: { _, completion in completion(.success(snapshot)) }
+            statusSnapshotProvider: { _, _, cacheOnly, completion in
+                guard !cacheOnly else {
+                    completion(.failure(.homeAssistantUnavailable))
+                    return
+                }
+                #expect(client.sentSectionNotModifiedIds.count == 1)
+                completion(.success(snapshot))
+            }
         )
 
         service.handle(GarminInboundMessage(
@@ -220,6 +228,98 @@ struct GarminIntegrationServiceTests {
                 id: GarminConfig.opaqueEntityId(serverId: item.serverId, entityId: item.id),
                 value: "20 C"
             ),
+        ])
+        #expect(client.sentValuesDeltas.first?.isTransient == true)
+    }
+
+    @Test func getRootSectionDoesNotRequestStatusSnapshot() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let service = GarminIntegrationService(client: client)
+        service.setup(
+            configProvider: { customConfig() },
+            statusSnapshotProvider: { _, _, _, completion in
+                Issue.record("Root section has no value items and should not request a snapshot")
+                completion(.failure(.homeAssistantUnavailable))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.root,
+            correlationId: "root-1"
+        ))
+
+        #expect(client.sentSections.first?.section.id == GarminOverviewSectionID.root)
+        #expect(client.sentValuesDeltas.isEmpty)
+    }
+
+    @Test func getSectionSendsCachedValuesThenChangedFreshValues() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let item = MagicItem(
+            id: "sensor.temperature",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Temperature"
+        )
+        let cachedSnapshot = GarminStatusSnapshot(statuses: [
+            .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "20 C"),
+        ])
+        let freshSnapshot = GarminStatusSnapshot(statuses: [
+            .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "21 C"),
+        ])
+        let service = GarminIntegrationService(client: client)
+        service.setup(
+            configProvider: { customConfig(statusItems: [item]) },
+            statusSnapshotProvider: { _, _, cacheOnly, completion in
+                #expect(client.sentSections.count == 1)
+                completion(.success(cacheOnly ? cachedSnapshot : freshSnapshot))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.custom("custom-1"),
+            correlationId: "s1"
+        ))
+
+        #expect(client.sentSections.first?.section.values.isEmpty == true)
+        #expect(client.sentValuesDeltas.map(\.values) == [
+            [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "20 C")],
+            [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "21 C")],
+        ])
+    }
+
+    @Test func getSectionSkipsFreshValuesWhenUnchangedFromCache() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let item = MagicItem(
+            id: "sensor.temperature",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Temperature"
+        )
+        let snapshot = GarminStatusSnapshot(statuses: [
+            .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "20 C"),
+        ])
+        let service = GarminIntegrationService(client: client)
+        service.setup(
+            configProvider: { customConfig(statusItems: [item]) },
+            statusSnapshotProvider: { _, _, _, completion in
+                completion(.success(snapshot))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.custom("custom-1"),
+            correlationId: "s1"
+        ))
+
+        #expect(client.sentSections.first?.section.values.isEmpty == true)
+        #expect(client.sentValuesDeltas.map(\.values) == [
+            [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "20 C")],
         ])
     }
 
@@ -313,7 +413,15 @@ struct GarminIntegrationServiceTests {
         )
         service.setup(
             configProvider: { config },
-            statusSnapshotProvider: { _, completion in completion(.success(snapshot)) }
+            statusSnapshotProvider: { _, items, cacheOnly, completion in
+                #expect(items.map(\.id) == [areaItem.id])
+                guard !cacheOnly else {
+                    completion(.failure(.homeAssistantUnavailable))
+                    return
+                }
+                #expect(client.sentSections.count == 1)
+                completion(.success(snapshot))
+            }
         )
 
         service.handle(GarminInboundMessage(
@@ -322,8 +430,8 @@ struct GarminIntegrationServiceTests {
             correlationId: "o1"
         ))
 
-        #expect(client.sentValuesDeltas.isEmpty)
-        #expect(client.sentSections.last?.section.values == [
+        #expect(client.sentSections.last?.section.values.isEmpty == true)
+        #expect(client.sentValuesDeltas.last?.values == [
             GarminOverviewValue(
                 id: GarminConfig.opaqueEntityId(serverId: areaItem.serverId, entityId: areaItem.id),
                 value: "21 C"
@@ -366,7 +474,12 @@ struct GarminIntegrationServiceTests {
         )
         service.setup(
             configProvider: { customConfig() },
-            statusSnapshotProvider: { _, completion in
+            statusSnapshotProvider: { _, _, cacheOnly, completion in
+                guard !cacheOnly else {
+                    completion(.failure(.homeAssistantUnavailable))
+                    return
+                }
+                #expect(client.sentSections.count == 1)
                 let visibleIds = GarminOverviewVisibleEntityRegistry.shared.visibleStatusItems(limit: GarminConfig.maxSectionItems)
                     .map { GarminConfig.opaqueItemId(for: $0) }
                 #expect(visibleIds == [GarminConfig.opaqueItemId(for: areaItem)])
@@ -382,7 +495,8 @@ struct GarminIntegrationServiceTests {
             correlationId: "o1"
         ))
 
-        #expect(client.sentSections.last?.section.values == [
+        #expect(client.sentSections.last?.section.values.isEmpty == true)
+        #expect(client.sentValuesDeltas.last?.values == [
             GarminOverviewValue(
                 id: GarminConfig.opaqueEntityId(serverId: areaItem.serverId, entityId: areaItem.id),
                 value: "21 C"
