@@ -850,6 +850,18 @@ public class HomeAssistantAPI {
             self.textInput = (response as? UNTextInputNotificationResponse)?.userText
         }
 
+        public init(
+            identifier: String,
+            category: String?,
+            actionData: Any?,
+            textInput: String? = nil
+        ) {
+            self.identifier = identifier
+            self.category = category
+            self.actionData = actionData
+            self.textInput = textInput
+        }
+
         public init(map: ObjectMapper.Map) throws {
             self.identifier = try map.value("identifier")
             self.category = try? map.value("category")

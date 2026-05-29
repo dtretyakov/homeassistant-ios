@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Shared
+import UserNotifications
 
 protocol GarminIntegrationControlling: AnyObject {
     var connectionState: GarminConnectionState { get }
@@ -10,6 +11,11 @@ protocol GarminIntegrationControlling: AnyObject {
     func setup()
     func handleConnectIQURL(_ url: URL) -> Bool
     func requestConnectionCheck(force: Bool)
+    func sendNotificationPrompt(
+        for content: UNNotificationContent,
+        server: Server,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    )
     func sync(
         config: GarminConfig,
         itemInfo: @escaping (MagicItem) -> MagicItem.Info?,
@@ -130,6 +136,14 @@ final class GarminIntegrationController: GarminIntegrationControlling {
         integrationService.requestDeviceSelection(force: force)
     }
 
+    func sendNotificationPrompt(
+        for content: UNNotificationContent,
+        server: Server,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        integrationService.sendNotificationPrompt(for: content, server: server, completion: completion)
+    }
+
     func sync(
         config: GarminConfig,
         itemInfo: @escaping (MagicItem) -> MagicItem.Info?,
@@ -171,6 +185,14 @@ final class DisabledGarminIntegrationController: GarminIntegrationControlling {
             "check_type": "garmin_connection_check",
             "error_code": GarminIntegrationError.sdkUnavailable.rawValue,
         ])
+    }
+
+    func sendNotificationPrompt(
+        for content: UNNotificationContent,
+        server: Server,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.failure(.sdkUnavailable))
     }
 
     func sync(

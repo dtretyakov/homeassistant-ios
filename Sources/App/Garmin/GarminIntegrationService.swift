@@ -3,6 +3,7 @@ import Foundation
 import HAKit
 import PromiseKit
 import Shared
+import UserNotifications
 
 final class GarminIntegrationService {
     typealias ActionExecutor = (MagicItem, Server, @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) -> Void
@@ -21,6 +22,7 @@ final class GarminIntegrationService {
     private var currentConfigProvider: (() -> GarminConfig?)?
     private var currentItemInfoProvider: ItemInfoProvider?
     private var currentStatusSnapshotProvider: StatusSnapshotProvider?
+    private let promptRegistry = GarminNotificationPromptRegistry()
 
     var connectionState: GarminConnectionState { client.state }
 
@@ -110,6 +112,31 @@ final class GarminIntegrationService {
             handleGetSection(message, config: config, completion: recordingCompletion)
         case .callAction:
             handleCallAction(message, config: config, completion: recordingCompletion)
+        case .promptResponse:
+            handlePromptResponse(message, completion: recordingCompletion)
+        }
+    }
+
+    func sendNotificationPrompt(
+        for content: UNNotificationContent,
+        server: Server,
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        guard client.state.isReady else {
+            completion(.failure(error(for: client.state)))
+            return
+        }
+        guard let pendingPrompt = GarminNotificationPromptBuilder.pendingPrompt(for: content, server: server) else {
+            completion(.success(()))
+            return
+        }
+
+        promptRegistry.store(pendingPrompt)
+        client.sendNotificationPrompt(pendingPrompt.prompt) { [weak self] result in
+            if case .failure = result {
+                self?.promptRegistry.remove(promptId: pendingPrompt.prompt.id)
+            }
+            completion(result)
         }
     }
 
@@ -287,6 +314,60 @@ final class GarminIntegrationService {
         }
     }
 
+    private func handlePromptResponse(
+        _ message: GarminInboundMessage,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        guard let promptId = message.id,
+              let actionId = message.actionId,
+              let pendingPrompt = promptRegistry.remove(promptId: promptId) else {
+            completeAction(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
+            return
+        }
+        guard !pendingPrompt.isExpired else {
+            GarminDiagnostics.record(.notificationPrompt, status: .skipped, metadata: [
+                "id": message.correlationId ?? pendingPrompt.prompt.correlationId ?? "",
+                "command_state": "expired",
+            ])
+            completeAction(.init(id: promptId, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
+            return
+        }
+        guard let action = pendingPrompt.action(for: actionId) else {
+            completeAction(.init(id: promptId, correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
+            return
+        }
+        guard let server = Current.servers.server(forServerIdentifier: pendingPrompt.serverIdentifier),
+              let api = Current.api(for: server) else {
+            completeAction(.init(id: promptId, correlationId: message.correlationId, state: .failed, error: .missingServer), completion: completion)
+            return
+        }
+
+        let info = HomeAssistantAPI.PushActionInfo(
+            identifier: UNNotificationContent.uncombinedAction(from: action.identifier),
+            category: pendingPrompt.category,
+            actionData: pendingPrompt.actionData,
+            textInput: nil
+        )
+        GarminDiagnostics.record(.notificationPrompt, status: .started, metadata: [
+            "id": message.correlationId ?? pendingPrompt.prompt.correlationId ?? "",
+            "action_count": pendingPrompt.prompt.actions.count,
+            "command_state": GarminCommandState.pending.rawValue,
+        ])
+        api.handlePushAction(for: info).pipe { [weak self] result in
+            switch result {
+            case .fulfilled:
+                self?.completeAction(.init(id: promptId, correlationId: message.correlationId, state: .success), completion: completion)
+            case let .rejected(error):
+                self?.completeAction(.init(
+                    id: promptId,
+                    correlationId: message.correlationId,
+                    state: .failed,
+                    error: GarminActionExecutor.map(error: error)
+                ), completion: completion)
+            }
+        }
+    }
+
     private func resolveAction(itemId: String, config: GarminConfig) -> MagicItem? {
         if let item = config.action(for: itemId), isActionUsable(item, config: config) {
             return item
@@ -398,6 +479,181 @@ final class GarminIntegrationService {
     }
 }
 
+private final class GarminNotificationPromptRegistry {
+    private static let maxStoredPrompts = 20
+
+    private let lock = NSLock()
+    private var promptsById: [String: GarminPendingNotificationPrompt] = [:]
+
+    func store(_ prompt: GarminPendingNotificationPrompt) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        pruneExpiredLocked()
+        promptsById[prompt.prompt.id] = prompt
+        pruneOverflowLocked()
+    }
+
+    func remove(promptId: String) -> GarminPendingNotificationPrompt? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        pruneExpiredLocked(except: promptId)
+        return promptsById.removeValue(forKey: promptId)
+    }
+
+    private func pruneExpiredLocked(except promptId: String? = nil) {
+        promptsById = promptsById.filter { id, prompt in
+            id == promptId || !prompt.isExpired
+        }
+    }
+
+    private func pruneOverflowLocked() {
+        guard promptsById.count > Self.maxStoredPrompts else { return }
+
+        let overflow = promptsById.count - Self.maxStoredPrompts
+        let idsToRemove = promptsById
+            .sorted { left, right in left.value.createdAt < right.value.createdAt }
+            .prefix(overflow)
+            .map(\.key)
+        idsToRemove.forEach { promptsById.removeValue(forKey: $0) }
+    }
+}
+
+private struct GarminPendingNotificationPrompt {
+    let prompt: GarminNotificationPrompt
+    let createdAt: Date
+    let serverIdentifier: String
+    let category: String?
+    let actionData: Any?
+    let actionsById: [String: MobileAppConfigPushCategory.Action]
+
+    var isExpired: Bool {
+        guard let expiresAt = prompt.expiresAt else { return false }
+        return Int(Date().timeIntervalSince1970) > expiresAt
+    }
+
+    func action(for id: String) -> MobileAppConfigPushCategory.Action? {
+        actionsById[id]
+    }
+}
+
+private enum GarminNotificationPromptBuilder {
+    private static let maxActions = 15
+    private static let maxTitleLength = 80
+    private static let maxBodyLength = 180
+    private static let maxActionLabelLength = 40
+    private static let defaultTimeout: TimeInterval = 300
+
+    static func pendingPrompt(for content: UNNotificationContent, server: Server) -> GarminPendingNotificationPrompt? {
+        let actionConfigs = Array(content.userInfoActionConfigs.filter(isWatchSafeAction).prefix(maxActions))
+        guard !actionConfigs.isEmpty else { return nil }
+
+        let promptId = "p_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let prompt = GarminNotificationPrompt(
+            id: promptId,
+            correlationId: promptId,
+            title: truncated(promptTitle(for: content), maxLength: maxTitleLength),
+            body: promptBody(for: content).map { truncated($0, maxLength: maxBodyLength) },
+            actions: actionConfigs.map {
+                GarminNotificationPromptAction(
+                    id: $0.identifier,
+                    label: truncated($0.title, maxLength: maxActionLabelLength)
+                )
+            },
+            expiresAt: expiresAt(for: content)
+        )
+
+        return GarminPendingNotificationPrompt(
+            prompt: prompt,
+            createdAt: Date(),
+            serverIdentifier: server.identifier.rawValue,
+            category: content.categoryIdentifier.isEmpty ? nil : content.categoryIdentifier,
+            actionData: content.userInfo["homeassistant"],
+            actionsById: Dictionary(uniqueKeysWithValues: actionConfigs.map { ($0.identifier, $0) })
+        )
+    }
+
+    private static func isWatchSafeAction(_ action: MobileAppConfigPushCategory.Action) -> Bool {
+        let behavior = action.behavior.lowercased()
+        let activationMode = action.activationMode.lowercased()
+        return !action.authenticationRequired
+            && !action.destructive
+            && behavior != "textinput"
+            && action.textInputButtonTitle == nil
+            && action.textInputPlaceholder == nil
+            && activationMode != "foreground"
+            && action.url == nil
+    }
+
+    private static func promptTitle(for content: UNNotificationContent) -> String {
+        if !content.title.isEmpty {
+            return content.title
+        }
+        if !content.subtitle.isEmpty {
+            return content.subtitle
+        }
+        return "Home Assistant"
+    }
+
+    private static func promptBody(for content: UNNotificationContent) -> String? {
+        if !content.body.isEmpty {
+            return content.body
+        }
+        if !content.subtitle.isEmpty && content.subtitle != content.title {
+            return content.subtitle
+        }
+        return nil
+    }
+
+    private static func expiresAt(for content: UNNotificationContent) -> Int {
+        if let explicit = intValue(content.userInfo["expires_at"]) {
+            return explicit
+        }
+        let timeout = timeIntervalValue(content.userInfo["timeout"]) ?? defaultTimeout
+        return Int(Date().addingTimeInterval(timeout).timeIntervalSince1970)
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        switch value {
+        case let value as Int:
+            return value
+        case let value as Double:
+            return Int(value)
+        case let value as Float:
+            return Int(value)
+        case let value as NSNumber:
+            return value.intValue
+        case let value as String:
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+
+    private static func timeIntervalValue(_ value: Any?) -> TimeInterval? {
+        switch value {
+        case let value as Int:
+            return TimeInterval(value)
+        case let value as Double:
+            return value
+        case let value as Float:
+            return TimeInterval(value)
+        case let value as NSNumber:
+            return value.doubleValue
+        case let value as String:
+            return TimeInterval(value)
+        default:
+            return nil
+        }
+    }
+
+    private static func truncated(_ value: String, maxLength: Int) -> String {
+        guard value.count > maxLength else { return value }
+        return String(value.prefix(maxLength - 3)) + "..."
+    }
+}
+
 private extension GarminDiagnostics {
     static func recordInbound(
         _ message: GarminInboundMessage,
@@ -476,7 +732,7 @@ private enum GarminActionExecutor {
         }
     }
 
-    private static func map(error: Error) -> GarminIntegrationError {
+    static func map(error: Error) -> GarminIntegrationError {
         if let authenticationError = error as? AuthenticationAPI.AuthenticationError {
             return map(authenticationError: authenticationError)
         }

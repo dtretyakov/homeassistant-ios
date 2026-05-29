@@ -104,6 +104,7 @@ class NotificationManager: NSObject, LocalPushManagerDelegate {
 
     private func handleRemoteNotification(userInfo: [AnyHashable: Any]) -> Guarantee<UIBackgroundFetchResult> {
         Current.Log.verbose("remote notification: \(userInfo)")
+        sendGarminPromptIfPossible(content: garminNotificationContent(from: userInfo))
 
         return commandManager.handle(userInfo).map {
             UIBackgroundFetchResult.newData
@@ -313,6 +314,8 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
             return
         }
 
+        sendGarminPromptIfPossible(content: notification.request.content)
+
         var methods: UNNotificationPresentationOptions = [.badge, .sound, .list, .banner]
         if let presentationOptions = notification.request.content.userInfo["presentation_options"] as? [String] {
             methods = []
@@ -351,6 +354,39 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
                 rootViewController?.present(hostingController, animated: true, completion: nil)
             })
         }
+    }
+}
+
+private extension NotificationManager {
+    func sendGarminPromptIfPossible(content: UNNotificationContent) {
+        guard GarminFeature.isEnabled, !content.userInfoActionConfigs.isEmpty else { return }
+        guard let server = Current.servers.server(for: content) else { return }
+
+        Current.garminIntegrationController.sendNotificationPrompt(for: content, server: server) { result in
+            if case let .failure(error) = result {
+                Current.Log.info("Garmin notification prompt was not sent: \(error)")
+            }
+        }
+    }
+
+    func garminNotificationContent(from userInfo: [AnyHashable: Any]) -> UNNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.userInfo = userInfo.reduce(into: [AnyHashable: Any]()) { result, pair in
+            result[pair.key] = pair.value
+        }
+
+        if let aps = userInfo["aps"] as? [String: Any] {
+            if let alert = aps["alert"] as? [String: Any] {
+                content.title = alert["title"] as? String ?? ""
+                content.subtitle = alert["subtitle"] as? String ?? ""
+                content.body = alert["body"] as? String ?? ""
+            } else if let alert = aps["alert"] as? String {
+                content.body = alert
+            }
+            content.categoryIdentifier = aps["category"] as? String ?? ""
+        }
+
+        return content
     }
 }
 

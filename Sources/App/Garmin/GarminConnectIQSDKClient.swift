@@ -88,6 +88,13 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
         send(.init(type: .actionResult, actionResult: result), completion: completion)
     }
 
+    func sendNotificationPrompt(
+        _ prompt: GarminNotificationPrompt,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        send(.init(type: .prompt, prompt: prompt), completion: completion)
+    }
+
     func disconnect() {
         commandHandler = nil
         state = .notConfigured

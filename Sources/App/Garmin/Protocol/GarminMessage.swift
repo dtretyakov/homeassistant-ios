@@ -27,6 +27,7 @@ final class GarminValuesRevisionCounter {
 public enum GarminInboundMessageType: String, Codable, Equatable {
     case getSection = "get"
     case callAction = "call"
+    case promptResponse = "prompt_response"
 }
 
 public enum GarminOutboundMessageType: String, Codable, Equatable {
@@ -34,6 +35,7 @@ public enum GarminOutboundMessageType: String, Codable, Equatable {
     case sectionNotModified = "same"
     case valuesDelta = "values"
     case actionResult = "result"
+    case prompt
 }
 
 public struct GarminInboundMessage: Codable, Equatable {
@@ -42,19 +44,22 @@ public struct GarminInboundMessage: Codable, Equatable {
     public let id: String?
     public let etag: String?
     public let correlationId: String?
+    public let actionId: String?
 
     public init(
         version: Int = GarminProtocolVersion.current,
         type: GarminInboundMessageType,
         id: String? = nil,
         etag: String? = nil,
-        correlationId: String? = nil
+        correlationId: String? = nil,
+        actionId: String? = nil
     ) {
         self.version = version
         self.type = type
         self.id = id
         self.etag = etag
         self.correlationId = correlationId
+        self.actionId = actionId
     }
 
     enum CodingKeys: String, CodingKey {
@@ -63,6 +68,7 @@ public struct GarminInboundMessage: Codable, Equatable {
         case id
         case etag = "e"
         case correlationId = "cid"
+        case actionId = "action_id"
     }
 
     public init(from decoder: Decoder) throws {
@@ -72,6 +78,7 @@ public struct GarminInboundMessage: Codable, Equatable {
         id = try container.decodeIfPresent(String.self, forKey: .id)
         etag = try container.decodeIfPresent(String.self, forKey: .etag)
         correlationId = try container.decodeIfPresent(String.self, forKey: .correlationId)
+        actionId = try container.decodeIfPresent(String.self, forKey: .actionId)
     }
 }
 
@@ -84,6 +91,7 @@ public struct GarminOutboundMessage: Encodable, Equatable {
     public let values: [GarminOverviewValue]?
     public let valuesRevision: Int?
     public let actionResult: GarminCommandResult?
+    public let prompt: GarminNotificationPrompt?
 
     public init(
         version: Int = GarminProtocolVersion.current,
@@ -93,7 +101,8 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         section: GarminOverviewSection? = nil,
         values: [GarminOverviewValue]? = nil,
         valuesRevision: Int? = nil,
-        actionResult: GarminCommandResult? = nil
+        actionResult: GarminCommandResult? = nil,
+        prompt: GarminNotificationPrompt? = nil
     ) {
         self.version = version
         self.type = type
@@ -103,6 +112,7 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         self.values = values
         self.valuesRevision = valuesRevision
         self.actionResult = actionResult
+        self.prompt = prompt
     }
 
     enum CodingKeys: String, CodingKey {
@@ -116,6 +126,10 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         case actionResult
         case state
         case error
+        case title
+        case body
+        case actions
+        case expiresAt = "expires_at"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -127,12 +141,64 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         try container.encodeIfPresent(section, forKey: .section)
         try container.encodeIfPresent(values, forKey: .values)
         try container.encodeIfPresent(valuesRevision, forKey: .valuesRevision)
+        if let prompt {
+            try container.encodeIfPresent(prompt.id, forKey: .id)
+            try container.encodeIfPresent(prompt.correlationId, forKey: .correlationId)
+            try container.encode(prompt.title, forKey: .title)
+            try container.encodeIfPresent(prompt.body, forKey: .body)
+            try container.encode(prompt.actions, forKey: .actions)
+            try container.encodeIfPresent(prompt.expiresAt, forKey: .expiresAt)
+        }
         if let actionResult {
             try container.encodeIfPresent(actionResult.id, forKey: .id)
             try container.encodeIfPresent(actionResult.correlationId, forKey: .correlationId)
             try container.encode(actionResult.state, forKey: .state)
             try container.encodeIfPresent(actionResult.error, forKey: .error)
         }
+    }
+}
+
+public struct GarminNotificationPrompt: Codable, Equatable {
+    public let id: String
+    public let correlationId: String?
+    public let title: String
+    public let body: String?
+    public let actions: [GarminNotificationPromptAction]
+    public let expiresAt: Int?
+
+    public init(
+        id: String,
+        correlationId: String?,
+        title: String,
+        body: String? = nil,
+        actions: [GarminNotificationPromptAction],
+        expiresAt: Int? = nil
+    ) {
+        self.id = id
+        self.correlationId = correlationId
+        self.title = title
+        self.body = body
+        self.actions = actions
+        self.expiresAt = expiresAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case correlationId = "cid"
+        case title
+        case body
+        case actions
+        case expiresAt = "expires_at"
+    }
+}
+
+public struct GarminNotificationPromptAction: Codable, Equatable {
+    public let id: String
+    public let label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
     }
 }
 

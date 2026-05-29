@@ -28,6 +28,7 @@ protocol GarminConnectIQClient: AnyObject {
     func sendSectionNotModified(sectionId: String, correlationId: String?, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func sendValuesDelta(_ values: [GarminOverviewValue], valuesRevision: Int, isTransient: Bool, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func sendActionResult(_ result: GarminCommandResult, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
+    func sendNotificationPrompt(_ prompt: GarminNotificationPrompt, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func disconnect()
     func requestDeviceSelection(force: Bool)
     func handleDeviceSelectionResponse(_ url: URL) -> Bool
@@ -54,6 +55,13 @@ extension GarminConnectIQClient {
         _ values: [GarminOverviewValue],
         valuesRevision: Int,
         isTransient: Bool,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.success(()))
+    }
+
+    func sendNotificationPrompt(
+        _ prompt: GarminNotificationPrompt,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
         completion(.success(()))

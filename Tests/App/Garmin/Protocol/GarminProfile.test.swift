@@ -101,6 +101,51 @@ struct GarminProfileTests {
         #expect(!dictionary.keys.contains("action_result"))
     }
 
+    @Test func promptMessagesUseFlatCompactKeysWithoutVersionBump() throws {
+        let prompt = GarminNotificationPrompt(
+            id: "p_1",
+            correlationId: "h123",
+            title: "Open front door?",
+            body: "Arrived home",
+            actions: [
+                .init(id: "OPEN", label: "Open"),
+                .init(id: "DISMISS", label: "Dismiss"),
+            ],
+            expiresAt: 1_710_000_300
+        )
+        let message = GarminOutboundMessage(type: .prompt, prompt: prompt)
+
+        let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(message)
+
+        #expect(GarminProtocolVersion.current == 2)
+        #expect(dictionary["v"] as? Int == 2)
+        #expect(dictionary["t"] as? String == "prompt")
+        #expect(dictionary["id"] as? String == "p_1")
+        #expect(dictionary["cid"] as? String == "h123")
+        #expect(dictionary["title"] as? String == "Open front door?")
+        #expect(dictionary["body"] as? String == "Arrived home")
+        #expect(dictionary["expires_at"] as? Int == 1_710_000_300)
+        let actions = try #require(dictionary["actions"] as? [[String: Any]])
+        #expect(actions.first?["id"] as? String == "OPEN")
+        #expect(actions.first?["label"] as? String == "Open")
+        #expect(!dictionary.keys.contains("prompt"))
+    }
+
+    @Test func promptResponseDecodesActionIdWithoutVersionBump() throws {
+        let response = try GarminPayloadCodec.decodeInboundDictionary([
+            "t": "prompt_response",
+            "id": "p_1",
+            "v": GarminProtocolVersion.current,
+            "cid": "h123",
+            "action_id": "OPEN",
+        ])
+
+        #expect(response.type == .promptResponse)
+        #expect(response.id == "p_1")
+        #expect(response.correlationId == "h123")
+        #expect(response.actionId == "OPEN")
+    }
+
     @Test func payloadByteLimitCanRejectLargeSectionSnapshot() throws {
         let oversizedLabel = String(repeating: "A", count: GarminPayloadLimits.outboundMessageBytes)
         let section = GarminOverviewSection(

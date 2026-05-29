@@ -3,6 +3,7 @@ import GRDB
 @testable import HomeAssistant
 @testable import Shared
 import Testing
+import UserNotifications
 
 @Suite(.serialized)
 struct GarminConfigurationViewModelTests {
@@ -392,6 +393,14 @@ private final class FakeGarminIntegrationController: GarminIntegrationControllin
     func requestConnectionCheck(force: Bool) {
         didRequestConnectionCheck = true
         connectionStateSubject.send(.selectingDevice)
+    }
+
+    func sendNotificationPrompt(
+        for content: UNNotificationContent,
+        server: Server,
+        completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        completion(.success(()))
     }
 
     func publishConnectionState(_ state: GarminConnectionState) {

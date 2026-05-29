@@ -9,6 +9,7 @@ enum GarminDiagnostics {
         case disconnect
         case inboundMessage = "inbound_message"
         case actionExecution = "action_execution"
+        case notificationPrompt = "notification_prompt"
         case statusObservation = "status_observation"
         case valueSnapshot = "value_snapshot"
         case statusSend = "status_send"

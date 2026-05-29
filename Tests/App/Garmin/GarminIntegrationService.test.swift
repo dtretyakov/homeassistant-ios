@@ -1,9 +1,11 @@
 import Combine
+import Foundation
 import HAKit
 @testable import HomeAssistant
 import PromiseKit
 @testable import Shared
 import Testing
+import UserNotifications
 
 final class FakeGarminConnectIQClient: GarminConnectIQClient {
     var state: GarminConnectionState = .ready(deviceName: "Test Garmin") {
@@ -20,6 +22,7 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
     var sentSections: [(section: GarminOverviewSection, correlationId: String?)] = []
     var sentSectionNotModifiedIds: [(sectionId: String, correlationId: String?)] = []
     var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int, isTransient: Bool)] = []
+    var sentPrompts: [GarminNotificationPrompt] = []
     var didRequestDeviceSelection = false
     private var commandHandler: ((GarminInboundMessage) -> Void)?
 
@@ -63,6 +66,14 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
         completion(.success(()))
     }
 
+    func sendNotificationPrompt(
+        _ prompt: GarminNotificationPrompt,
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        sentPrompts.append(prompt)
+        completion(.success(()))
+    }
+
     func disconnect() {
         state = .notConfigured
     }
@@ -87,6 +98,12 @@ private final class GarminFakeWebhookManager: WebhookManager {
     ) -> Promise<Void> {
         let (promise, seal) = Promise<Void>.pending()
         sendRequestHandler?(identifier, server, request, seal)
+        return promise
+    }
+
+    override func sendEphemeral(server: Server, request: WebhookRequest) -> Promise<Void> {
+        let (promise, seal) = Promise<Void>.pending()
+        sendRequestHandler?(.unhandled, server, request, seal)
         return promise
     }
 }
@@ -155,6 +172,143 @@ struct GarminIntegrationServiceTests {
 
         #expect(handledResult?.state == .failed)
         #expect(handledResult?.error == .unsupportedProtocol)
+    }
+
+    @Test func notificationPromptSendsOnlyWatchSafeActions() throws {
+        try withServer(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let service = GarminIntegrationService(client: client)
+            let content = notificationContent(actions: [
+                ["identifier": "OPEN", "title": "Open"],
+                ["identifier": "REPLY", "title": "Reply"],
+                [
+                    "identifier": "CUSTOM_TEXT",
+                    "title": "Custom text",
+                    "textInputButtonTitle": "Send",
+                    "textInputPlaceholder": "Message",
+                ],
+                ["identifier": "URI", "title": "Open app", "url": "homeassistant://lovelace"],
+                ["identifier": "FOREGROUND", "title": "Foreground", "activationMode": "foreground"],
+                ["identifier": "OPEN", "title": "Open duplicate"],
+            ])
+
+            service.sendNotificationPrompt(for: content, server: server) { result in
+                guard case .success = result else {
+                    Issue.record("Expected prompt send to succeed")
+                    return
+                }
+            }
+
+            let prompt = try #require(client.sentPrompts.first)
+            #expect(prompt.title == "Open front door?")
+            #expect(prompt.body == "Arrived home")
+            #expect(prompt.actions.map(\.id) == [
+                "OPEN",
+                UNNotificationContent.combinedAction(base: "OPEN", appended: "2"),
+            ])
+            #expect(prompt.actions.map(\.label) == ["Open", "Open duplicate"])
+        }
+    }
+
+    @Test func notificationPromptTruncatesWatchVisibleText() throws {
+        try withServer(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let service = GarminIntegrationService(client: client)
+            let content = notificationContent(actions: [
+                ["identifier": "OPEN", "title": String(repeating: "A", count: 60)],
+            ])
+            let mutableContent = try #require(content as? UNMutableNotificationContent)
+            mutableContent.title = String(repeating: "T", count: 120)
+            mutableContent.body = String(repeating: "B", count: 240)
+
+            service.sendNotificationPrompt(for: mutableContent, server: server) { _ in }
+
+            let prompt = try #require(client.sentPrompts.first)
+            #expect(prompt.title.count == 80)
+            #expect(prompt.title.hasSuffix("..."))
+            #expect(prompt.body?.count == 180)
+            #expect(prompt.body?.hasSuffix("...") == true)
+            #expect(prompt.actions.first?.label.count == 40)
+            #expect(prompt.actions.first?.label.hasSuffix("...") == true)
+        }
+    }
+
+    @Test func promptResponseFiresNotificationActionEventWithOriginalActionData() async throws {
+        try await withWebhookCaptureAsync { capturedRequests in
+            let client = FakeGarminConnectIQClient()
+            let service = GarminIntegrationService(client: client)
+            let server = try #require(Current.servers.server(forServerIdentifier: "server-1"))
+            let content = notificationContent(actions: [
+                ["identifier": "OPEN", "title": "Open"],
+            ])
+
+            service.sendNotificationPrompt(for: content, server: server) { _ in }
+            let prompt = try #require(client.sentPrompts.first)
+            service.handle(
+                GarminInboundMessage(
+                    type: .promptResponse,
+                    id: prompt.id,
+                    correlationId: "c1",
+                    actionId: "OPEN"
+                ),
+                config: GarminConfig()
+            ) { _ in }
+
+            try await waitUntil {
+                capturedRequests().contains { request in
+                    guard let data = request.data as? [String: Any] else { return false }
+                    return data["event_type"] as? String == "mobile_app_notification_action"
+                }
+            }
+            let mobileAppRequest = try #require(capturedRequests().first { request in
+                guard let data = request.data as? [String: Any] else { return false }
+                return data["event_type"] as? String == "mobile_app_notification_action"
+            })
+            let data = try #require(mobileAppRequest.data as? [String: Any])
+            let eventData = try #require(data["event_data"] as? [String: Any])
+            let actionData = try #require(eventData["action_data"] as? [String: String])
+            #expect(eventData["action"] as? String == "OPEN")
+            #expect(actionData["door"] == "front")
+        }
+    }
+
+    @Test func duplicatePromptResponseUsesOriginalActionIdentifier() async throws {
+        try await withWebhookCaptureAsync { capturedRequests in
+            let client = FakeGarminConnectIQClient()
+            let service = GarminIntegrationService(client: client)
+            let server = try #require(Current.servers.server(forServerIdentifier: "server-1"))
+            let content = notificationContent(actions: [
+                ["identifier": "OPEN", "title": "Open"],
+                ["identifier": "OPEN", "title": "Open duplicate"],
+            ])
+
+            service.sendNotificationPrompt(for: content, server: server) { _ in }
+            let prompt = try #require(client.sentPrompts.first)
+            let duplicateId = try #require(prompt.actions.last?.id)
+            service.handle(
+                GarminInboundMessage(
+                    type: .promptResponse,
+                    id: prompt.id,
+                    correlationId: "c1",
+                    actionId: duplicateId
+                ),
+                config: GarminConfig()
+            ) { _ in }
+
+            try await waitUntil {
+                capturedRequests().contains { request in
+                    guard let data = request.data as? [String: Any] else { return false }
+                    return data["event_type"] as? String == "mobile_app_notification_action"
+                }
+            }
+            let mobileAppRequest = try #require(capturedRequests().first { request in
+                guard let data = request.data as? [String: Any] else { return false }
+                return data["event_type"] as? String == "mobile_app_notification_action"
+            })
+            let data = try #require(mobileAppRequest.data as? [String: Any])
+            let eventData = try #require(data["event_data"] as? [String: Any])
+            #expect(eventData["action"] as? String == "OPEN")
+        }
     }
 
     @Test func syncDoesNotPushUncorrelatedSectionSnapshots() throws {
@@ -768,6 +922,19 @@ struct GarminIntegrationServiceTests {
         )
     }
 
+    private func notificationContent(actions: [[String: Any]]) -> UNNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.title = "Open front door?"
+        content.body = "Arrived home"
+        content.categoryIdentifier = "DYNAMIC"
+        content.userInfo = [
+            "actions": actions,
+            "homeassistant": ["door": "front"],
+            "timeout": 300,
+        ]
+        return content
+    }
+
     private func withServer(
         identifier: String,
         _ body: (Server) throws -> Void
@@ -804,6 +971,59 @@ struct GarminIntegrationServiceTests {
             }
 
             try body({ capturedRequests })
+        }
+    }
+
+    private func withWebhookCaptureAsync(
+        _ body: (() -> [WebhookRequest]) async throws -> Void
+    ) async throws {
+        try await withServerAsync(identifier: "server-1") { _ in
+            let previousWebhooks = Current.webhooks
+            let webhooks = GarminFakeWebhookManager()
+            var capturedRequests: [WebhookRequest] = []
+            webhooks.sendRequestHandler = { _, _, request, resolver in
+                capturedRequests.append(request)
+                resolver.fulfill(())
+            }
+            Current.webhooks = webhooks
+            defer {
+                Current.webhooks = previousWebhooks
+            }
+
+            try await body({ capturedRequests })
+        }
+    }
+
+    private func withServerAsync(
+        identifier: String,
+        _ body: (Server) async throws -> Void
+    ) async throws {
+        let previousServers = Current.servers
+        let previousCachedApis = Current.cachedApis
+        defer {
+            Current.servers = previousServers
+            Current.cachedApis = previousCachedApis
+        }
+
+        let servers = FakeServerManager()
+        let server = servers.add(identifier: .init(rawValue: identifier), serverInfo: .fake())
+        Current.servers = servers
+        Current.cachedApis = [:]
+
+        try await body(server)
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 1,
+        _ condition: () -> Bool
+    ) async throws {
+        let start = Date()
+        while !condition() {
+            guard Date().timeIntervalSince(start) < timeout else {
+                Issue.record("Timed out waiting for condition")
+                return
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
     }
 }
