@@ -408,7 +408,7 @@ struct GarminIntegrationServiceTests {
         #expect(client.sentValuesDeltas.isEmpty)
     }
 
-    @Test func getSectionSendsCachedValuesThenChangedFreshValues() throws {
+    @Test func getSectionSendsFreshValuesWithoutPhoneCacheDelta() throws {
         defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
         let client = FakeGarminConnectIQClient()
         let item = MagicItem(
@@ -417,18 +417,17 @@ struct GarminIntegrationServiceTests {
             type: .entity,
             displayText: "Temperature"
         )
-        let cachedSnapshot = GarminStatusSnapshot(statuses: [
-            .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "20 C"),
-        ])
         let freshSnapshot = GarminStatusSnapshot(statuses: [
             .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "21 C"),
         ])
+        var requestedCacheModes: [Bool] = []
         let service = GarminIntegrationService(client: client)
         service.setup(
             configProvider: { customConfig(statusItems: [item]) },
             statusSnapshotProvider: { _, _, cacheOnly, completion in
                 #expect(client.sentSections.count == 1)
-                completion(.success(cacheOnly ? cachedSnapshot : freshSnapshot))
+                requestedCacheModes.append(cacheOnly)
+                completion(.success(freshSnapshot))
             }
         )
 
@@ -439,13 +438,13 @@ struct GarminIntegrationServiceTests {
         ))
 
         #expect(client.sentSections.first?.section.values.isEmpty == true)
+        #expect(requestedCacheModes == [false])
         #expect(client.sentValuesDeltas.map(\.values) == [
-            [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "20 C")],
             [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "21 C")],
         ])
     }
 
-    @Test func getSectionSkipsFreshValuesWhenUnchangedFromCache() throws {
+    @Test func getSectionSendsSingleFreshValuesDelta() throws {
         defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
         let client = FakeGarminConnectIQClient()
         let item = MagicItem(
@@ -457,10 +456,12 @@ struct GarminIntegrationServiceTests {
         let snapshot = GarminStatusSnapshot(statuses: [
             .init(id: GarminConfig.opaqueItemId(for: item), label: "Temperature", value: "20 C"),
         ])
+        var requestedCacheModes: [Bool] = []
         let service = GarminIntegrationService(client: client)
         service.setup(
             configProvider: { customConfig(statusItems: [item]) },
-            statusSnapshotProvider: { _, _, _, completion in
+            statusSnapshotProvider: { _, _, cacheOnly, completion in
+                requestedCacheModes.append(cacheOnly)
                 completion(.success(snapshot))
             }
         )
@@ -472,6 +473,7 @@ struct GarminIntegrationServiceTests {
         ))
 
         #expect(client.sentSections.first?.section.values.isEmpty == true)
+        #expect(requestedCacheModes == [false])
         #expect(client.sentValuesDeltas.map(\.values) == [
             [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "20 C")],
         ])
@@ -760,6 +762,84 @@ struct GarminIntegrationServiceTests {
             #expect(handledResult?.correlationId == "c1")
             #expect(client.sentResults.first?.state == .success)
             #expect(client.sentResults.first?.correlationId == "c1")
+        }
+    }
+
+    @Test func executorSuccessRefreshesAffectedStatusItemAfterResult() throws {
+        try withServer(identifier: "server-1") { _ in
+            let client = FakeGarminConnectIQClient()
+            let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
+            let itemId = GarminConfig.opaqueItemId(for: item)
+            let config = customConfig(actionItems: [item])
+            var requestedItemIds: [[String]] = []
+            var requestedCacheModes: [Bool] = []
+            let service = GarminIntegrationService(
+                client: client,
+                actionExecutor: { _, _, completion in
+                    completion(.success(()))
+                },
+                delayedWorkScheduler: { _, work in
+                    work()
+                }
+            )
+            service.setup(
+                configProvider: { config },
+                statusSnapshotProvider: { _, items, cacheOnly, completion in
+                    requestedItemIds.append(items.map(\.id))
+                    requestedCacheModes.append(cacheOnly)
+                    completion(.success(GarminStatusSnapshot(statuses: [
+                        .init(id: itemId, label: "Kitchen", value: "On"),
+                    ])))
+                }
+            )
+            let message = GarminInboundMessage(
+                type: .callAction,
+                id: itemId,
+                correlationId: "c1"
+            )
+
+            service.handle(message, config: config) { _ in }
+
+            #expect(client.sentResults.first?.state == .success)
+            #expect(requestedItemIds == [[item.id], [item.id]])
+            #expect(requestedCacheModes == [false, false])
+            #expect(client.sentValuesDeltas.map(\.values) == [
+                [GarminOverviewValue(id: itemId, value: "On")],
+                [GarminOverviewValue(id: itemId, value: "On")],
+            ])
+        }
+    }
+
+    @Test func executorSuccessDoesNotRefreshActionOnlyItem() throws {
+        try withServer(identifier: "server-1") { _ in
+            let client = FakeGarminConnectIQClient()
+            let item = MagicItem(id: "script.good_night", serverId: "server-1", type: .script)
+            let config = customConfig(actionItems: [item])
+            let service = GarminIntegrationService(
+                client: client,
+                actionExecutor: { _, _, completion in
+                    completion(.success(()))
+                },
+                delayedWorkScheduler: { _, work in
+                    work()
+                }
+            )
+            service.setup(
+                configProvider: { config },
+                statusSnapshotProvider: { _, _, _, completion in
+                    Issue.record("Action-only script should not request a status snapshot")
+                    completion(.failure(.homeAssistantUnavailable))
+                }
+            )
+
+            service.handle(GarminInboundMessage(
+                type: .callAction,
+                id: GarminConfig.opaqueItemId(for: item),
+                correlationId: "c1"
+            ), config: config) { _ in }
+
+            #expect(client.sentResults.first?.state == .success)
+            #expect(client.sentValuesDeltas.isEmpty)
         }
     }
 

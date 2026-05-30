@@ -123,19 +123,22 @@ public struct GarminOverviewItem: Codable, Equatable {
     public let type: GarminOverviewItemType
     public let cap: Int?
     public let confirmation: GarminOverviewActionConfirmation?
+    public let domain: String?
 
     public init(
         id: String,
         label: String,
         type: GarminOverviewItemType,
         cap: Int? = nil,
-        confirmation: GarminOverviewActionConfirmation? = nil
+        confirmation: GarminOverviewActionConfirmation? = nil,
+        domain: String? = nil
     ) {
         self.id = id
         self.label = label
         self.type = type
         self.cap = cap
         self.confirmation = confirmation
+        self.domain = domain
     }
 
     enum CodingKeys: String, CodingKey {
@@ -144,6 +147,7 @@ public struct GarminOverviewItem: Codable, Equatable {
         case type
         case cap
         case confirmation
+        case domain = "d"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -157,6 +161,9 @@ public struct GarminOverviewItem: Codable, Equatable {
         if confirmation == .required {
             try container.encode(confirmation, forKey: .confirmation)
         }
+        if type == .item, let domain {
+            try container.encode(domain, forKey: .domain)
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -166,6 +173,7 @@ public struct GarminOverviewItem: Codable, Equatable {
         type = try container.decode(GarminOverviewItemType.self, forKey: .type)
         cap = try container.decodeIfPresent(Int.self, forKey: .cap)
         confirmation = try container.decodeIfPresent(GarminOverviewActionConfirmation.self, forKey: .confirmation)
+        domain = try container.decodeIfPresent(String.self, forKey: .domain)
     }
 }
 
@@ -453,7 +461,7 @@ final class GarminHomeOverviewSource {
         return GarminOverviewSection(
             id: id,
             title: title,
-            etag: etag(items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")" }),
+            etag: etag(items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|\($0.domain ?? "")" }),
             items: items,
             values: values
         )
@@ -475,7 +483,8 @@ final class GarminHomeOverviewSource {
             label: entity.name,
             type: .item,
             cap: GarminConfig.capability(for: item),
-            confirmation: confirmation(for: item)
+            confirmation: confirmation(for: item),
+            domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain)
         )
     }
 
@@ -492,7 +501,8 @@ final class GarminHomeOverviewSource {
             label: item.name(info: info ?? .fallback(for: item)),
             type: .item,
             cap: capability,
-            confirmation: confirmation(for: item)
+            confirmation: confirmation(for: item),
+            domain: GarminSupportedDomains.compactDomainCode(for: item)
         )
     }
 
@@ -505,7 +515,8 @@ final class GarminHomeOverviewSource {
             label: entity.name,
             type: .item,
             cap: capability,
-            confirmation: confirmation(for: item)
+            confirmation: confirmation(for: item),
+            domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain)
         )
     }
 

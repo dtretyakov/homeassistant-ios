@@ -328,6 +328,50 @@ public enum GarminSupportedDomains {
         }
     }
 
+    public static func compactDomainCode(for item: MagicItem) -> String? {
+        switch item.type {
+        case .scene:
+            return "sc"
+        case .script:
+            return "sr"
+        case .entity:
+            return compactDomainCode(rawDomain: rawDomain(for: item))
+        case .action, .folder, .assistPipeline, .assistPrompt:
+            return nil
+        }
+    }
+
+    public static func compactDomainCode(rawDomain: String) -> String? {
+        switch rawDomain {
+        case Domain.scene.rawValue:
+            return "sc"
+        case Domain.script.rawValue:
+            return "sr"
+        case Domain.light.rawValue:
+            return "l"
+        case Domain.switch.rawValue:
+            return "sw"
+        case Domain.inputBoolean.rawValue:
+            return "ib"
+        case Domain.cover.rawValue:
+            return "cv"
+        case Domain.lock.rawValue:
+            return "lk"
+        case "alarm_control_panel":
+            return "al"
+        case Domain.binarySensor.rawValue:
+            return "bs"
+        case Domain.sensor.rawValue:
+            return "sn"
+        case Domain.person.rawValue:
+            return "p"
+        case "device_tracker":
+            return "dt"
+        default:
+            return nil
+        }
+    }
+
     private static func rawDomain(for item: MagicItem) -> String {
         guard let domain = item.id.split(separator: ".").first else { return "" }
         return String(domain)

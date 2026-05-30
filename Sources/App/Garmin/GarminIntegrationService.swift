@@ -15,10 +15,12 @@ final class GarminIntegrationService {
         @escaping (Swift.Result<GarminStatusSnapshot, GarminIntegrationError>) -> Void
     ) -> Void
     typealias OverviewSourceProvider = () -> GarminHomeOverviewSource
+    typealias DelayedWorkScheduler = (TimeInterval, @escaping () -> Void) -> Void
 
     private let client: GarminConnectIQClient
     private let actionExecutor: ActionExecutor
     private let overviewSourceProvider: OverviewSourceProvider
+    private let delayedWorkScheduler: DelayedWorkScheduler
     private var currentConfigProvider: (() -> GarminConfig?)?
     private var currentItemInfoProvider: ItemInfoProvider?
     private var currentStatusSnapshotProvider: StatusSnapshotProvider?
@@ -29,11 +31,15 @@ final class GarminIntegrationService {
     init(
         client: GarminConnectIQClient,
         actionExecutor: @escaping ActionExecutor = GarminActionExecutor.execute,
-        overviewSourceProvider: @escaping OverviewSourceProvider = { GarminHomeOverviewSource() }
+        overviewSourceProvider: @escaping OverviewSourceProvider = { GarminHomeOverviewSource() },
+        delayedWorkScheduler: @escaping DelayedWorkScheduler = { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
     ) {
         self.client = client
         self.actionExecutor = actionExecutor
         self.overviewSourceProvider = overviewSourceProvider
+        self.delayedWorkScheduler = delayedWorkScheduler
     }
 
     func setup(
@@ -222,19 +228,11 @@ final class GarminIntegrationService {
             return
         }
 
-        currentStatusSnapshotProvider(config, valueItems, true) { [weak self] cachedResult in
+        currentStatusSnapshotProvider(config, valueItems, false) { [weak self] freshResult in
             guard let self else { return }
-            let cachedValues = self.overviewValues(result: cachedResult, items: valueItems)
-            if !cachedValues.isEmpty {
-                self.sendValuesIfNeeded(cachedValues, correlationId: correlationId) { _ in }
-            }
-
-            currentStatusSnapshotProvider(config, valueItems, false) { [weak self] freshResult in
-                guard let self else { return }
-                let freshValues = self.overviewValues(result: freshResult, items: valueItems)
-                guard !freshValues.isEmpty, freshValues != cachedValues else { return }
-                self.sendValuesIfNeeded(freshValues, correlationId: correlationId) { _ in }
-            }
+            let freshValues = self.overviewValues(result: freshResult, items: valueItems)
+            guard !freshValues.isEmpty else { return }
+            self.sendValuesIfNeeded(freshValues, correlationId: correlationId) { _ in }
         }
     }
 
@@ -310,7 +308,15 @@ final class GarminIntegrationService {
             case let .failure(error):
                 result = .init(id: itemId, correlationId: message.correlationId, state: .failed, error: error)
             }
-            self?.completeAction(result, completion: completion)
+            self?.completeAction(result) { commandResult in
+                completion(commandResult)
+                guard case .success = executionResult else { return }
+                self?.schedulePostActionValueRefresh(
+                    for: item,
+                    config: config,
+                    correlationId: message.correlationId
+                )
+            }
         }
     }
 
@@ -436,6 +442,45 @@ final class GarminIntegrationService {
             "id": result.correlationId ?? "",
         ])
         send(result, completion: completion)
+    }
+
+    private func schedulePostActionValueRefresh(
+        for item: MagicItem,
+        config: GarminConfig,
+        correlationId: String?
+    ) {
+        guard GarminSupportedDomains.supportsStatus(item) else { return }
+        GarminOverviewVisibleEntityRegistry.shared.register(item: item)
+
+        [0.4, 1.8].forEach { delay in
+            delayedWorkScheduler(delay) { [weak self] in
+                self?.refreshFreshValues(
+                    for: [item],
+                    config: config,
+                    correlationId: correlationId
+                )
+            }
+        }
+    }
+
+    private func refreshFreshValues(
+        for items: [MagicItem],
+        config: GarminConfig,
+        correlationId: String?
+    ) {
+        let valueItems = Array(items
+            .filter(GarminSupportedDomains.supportsStatus)
+            .prefix(GarminConfig.maxSectionItems))
+        guard !valueItems.isEmpty, let currentStatusSnapshotProvider else {
+            return
+        }
+
+        currentStatusSnapshotProvider(config, valueItems, false) { [weak self] freshResult in
+            guard let self else { return }
+            let freshValues = self.overviewValues(result: freshResult, items: valueItems)
+            guard !freshValues.isEmpty else { return }
+            self.sendValuesIfNeeded(freshValues, correlationId: correlationId) { _ in }
+        }
     }
 
     private func completeTransportResult(

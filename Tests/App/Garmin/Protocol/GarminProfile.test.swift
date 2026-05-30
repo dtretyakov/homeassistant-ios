@@ -35,14 +35,16 @@ struct GarminProfileTests {
                     id: "e_status1",
                     label: "Temperature",
                     type: .item,
-                    cap: GarminConfig.valueCapability
+                    cap: GarminConfig.valueCapability,
+                    domain: "sn"
                 ),
                 GarminOverviewItem(
                     id: "e_action1",
                     label: "Movie",
                     type: .item,
                     cap: GarminConfig.actionCapability,
-                    confirmation: .required
+                    confirmation: .required,
+                    domain: "sc"
                 ),
             ],
             values: [.init(id: "e_status1", value: "20 C")]
@@ -55,6 +57,8 @@ struct GarminProfileTests {
         #expect(encoded.contains("\"type\":\"item\""))
         #expect(encoded.contains("\"cap\":1"))
         #expect(encoded.contains("\"cap\":2"))
+        #expect(encoded.contains("\"d\":\"sn\""))
+        #expect(encoded.contains("\"d\":\"sc\""))
         #expect(encoded.contains("\"etag\":\"root-etag\""))
         #expect(encoded.contains("\"vals\""))
         #expect(encoded.contains("\"v\":\"20 C\""))
@@ -65,6 +69,54 @@ struct GarminProfileTests {
         #expect(!encoded.contains("\"value_id\""))
         #expect(!encoded.contains("\"icon_name\""))
         #expect(!encoded.contains("\"domain\""))
+    }
+
+    @Test func overviewItemDomainUsesCompactWireKeyAndDecodesMissingDomain() throws {
+        let item = GarminOverviewItem(
+            id: "e_light",
+            label: "Kitchen",
+            type: .item,
+            cap: GarminConfig.valueCapability | GarminConfig.actionCapability,
+            domain: "l"
+        )
+        let message = GarminOutboundMessage(
+            type: .sectionSnapshot,
+            section: .init(id: "custom", title: "Custom", etag: "e1", items: [
+                .init(id: "area:kitchen", label: "Kitchen", type: .section, domain: "l"),
+                item,
+            ])
+        )
+
+        let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(message)
+        let encoded = try String(decoding: JSONSerialization.data(withJSONObject: dictionary), as: UTF8.self)
+
+        #expect(encoded.contains("\"d\":\"l\""))
+        #expect(!encoded.contains("\"domain\""))
+        let section = try #require(dictionary["section"] as? [String: Any])
+        let items = try #require(section["items"] as? [[String: Any]])
+        #expect(items.first?["d"] == nil)
+        #expect(items.last?["d"] as? String == "l")
+
+        let decoded = try JSONDecoder().decode(GarminOverviewItem.self, from: Data("""
+        {"id":"e_old","label":"Old","type":"item","cap":1}
+        """.utf8))
+        #expect(decoded.domain == nil)
+    }
+
+    @Test func compactDomainCodesUseDocumentedWireValues() {
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "scene") == "sc")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "script") == "sr")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "light") == "l")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "switch") == "sw")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "input_boolean") == "ib")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "cover") == "cv")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "lock") == "lk")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "alarm_control_panel") == "al")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "binary_sensor") == "bs")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "sensor") == "sn")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "person") == "p")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "device_tracker") == "dt")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "media_player") == nil)
     }
 
     @Test func notModifiedMessagesUseFlatCompactKeys() throws {
@@ -276,6 +328,7 @@ struct GarminProfileTests {
 
         #expect(section.items.map(\.type) == [.item, .item])
         #expect(section.items.map(\.cap) == [GarminConfig.valueCapability, GarminConfig.actionCapability])
+        #expect(section.items.map(\.domain) == ["sn", "sc"])
         #expect(section.items.first?.id == GarminConfig.opaqueItemId(for: status))
         #expect(section.items.last?.id == GarminConfig.opaqueItemId(for: action))
         #expect(section.items.last?.confirmation == .required)
@@ -313,9 +366,11 @@ struct GarminProfileTests {
         #expect(areas.items.map(\.type) == [.section])
         #expect(areaDetail.items.map(\.type) == [.item])
         #expect(areaDetail.items.map(\.cap) == [GarminConfig.valueCapability | GarminConfig.actionCapability])
+        #expect(areaDetail.items.map(\.domain) == ["l"])
         #expect(areaDetail.values == [.init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "on")])
         #expect(summaries.items.first?.type == .section)
         #expect(lights.items.map(\.label) == ["Kitchen"])
+        #expect(lights.items.map(\.domain) == ["l"])
         #expect(lights.values == [.init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "on")])
     }
 
@@ -325,7 +380,8 @@ struct GarminProfileTests {
                 id: "e_\(index)",
                 label: "Status \(index)",
                 type: .item,
-                cap: GarminConfig.valueCapability
+                cap: GarminConfig.valueCapability,
+                domain: "sn"
             )
         }
         let message = GarminOutboundMessage(
@@ -381,6 +437,33 @@ struct GarminProfileTests {
         #expect(!encodedDelta.contains("\"value\""))
         #expect(!encodedDelta.contains("light.kitchen"))
         #expect(!encodedDelta.contains("server-1"))
+    }
+
+    @Test func overviewSectionEtagIncludesDomainMarker() throws {
+        let entity = MagicItem(id: "sensor.temperature", serverId: "server-1", type: .entity, displayText: "Temperature")
+        let config = GarminConfig(
+            selectedServerId: "server-1",
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(id: "custom-1", title: "Quick", items: [.init(item: entity)]),
+            ])]
+        )
+        let source = GarminHomeOverviewSource(entityProvider: { [] }, areaProvider: { _ in [] })
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.custom("custom-1"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+        let sameWithoutDomain = GarminOverviewSection(
+            id: section.id,
+            title: section.title,
+            etag: GarminConfig.fnv1a64Hex(section.items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|" }.joined(separator: "\n")),
+            items: section.items.map {
+                GarminOverviewItem(id: $0.id, label: $0.label, type: $0.type, cap: $0.cap, confirmation: $0.confirmation)
+            }
+        )
+
+        #expect(section.items.first?.domain == "sn")
+        #expect(section.etag != sameWithoutDomain.etag)
     }
 
     private func entity(
