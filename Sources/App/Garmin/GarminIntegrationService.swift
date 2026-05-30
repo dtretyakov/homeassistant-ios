@@ -151,6 +151,7 @@ final class GarminIntegrationService {
         config: GarminConfig,
         completion: @escaping (GarminCommandResult) -> Void
     ) {
+        let requestStartedAt = Date()
         guard client.state.isReady else {
             completion(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: error(for: client.state)))
             return
@@ -163,13 +164,16 @@ final class GarminIntegrationService {
         let overviewSource = overviewSourceProvider()
         let itemInfo = currentItemInfoProvider ?? { _ in nil }
         let visibleValueItems: [MagicItem]
+        let valueItemsDurationMs: Int
 
         do {
+            let valueItemsStartedAt = Date()
             visibleValueItems = try overviewSource.valueItems(
                 id: sectionId,
                 config: config,
                 itemInfo: itemInfo
             )
+            valueItemsDurationMs = durationMilliseconds(since: valueItemsStartedAt)
             updateVisibleItems(for: visibleValueItems)
         } catch {
             send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
@@ -177,6 +181,7 @@ final class GarminIntegrationService {
         }
 
         do {
+            let sectionBuildStartedAt = Date()
             guard let section = try overviewSource.section(
                 id: sectionId,
                 config: config,
@@ -186,29 +191,45 @@ final class GarminIntegrationService {
                 send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
                 return
             }
+            let sectionBuildDurationMs = durationMilliseconds(since: sectionBuildStartedAt)
+            let responseCacheStatus = message.etag == section.etag ? "same" : "snapshot"
 
-            let completeAndRefreshValues: (Swift.Result<Void, GarminIntegrationError>) -> Void = { [weak self] result in
-                guard let self else { return }
-                self.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
-                guard case .success = result else { return }
-                self.refreshValues(
-                    for: visibleValueItems,
-                    config: config,
-                    correlationId: message.correlationId
-                )
+            let completeAndRefreshValues: (Date) -> (Swift.Result<Void, GarminIntegrationError>) -> Void = { responseSendStartedAt in
+                { [weak self] result in
+                    guard let self else { return }
+                    self.recordSectionLatency(
+                        message: message,
+                        result: result,
+                        cacheStatus: responseCacheStatus,
+                        sectionItemCount: section.items.count,
+                        requestStartedAt: requestStartedAt,
+                        valueItemsDurationMs: valueItemsDurationMs,
+                        sectionBuildDurationMs: sectionBuildDurationMs,
+                        responseSendStartedAt: responseSendStartedAt
+                    )
+                    self.completeTransportResult(result, correlationId: message.correlationId, completion: completion)
+                    guard case .success = result else { return }
+                    self.refreshValues(
+                        for: visibleValueItems,
+                        config: config,
+                        correlationId: message.correlationId
+                    )
+                }
             }
 
             if message.etag == section.etag {
+                let responseSendStartedAt = Date()
                 client.sendSectionNotModified(
                     sectionId: section.id,
                     correlationId: message.correlationId,
-                    completion: completeAndRefreshValues
+                    completion: completeAndRefreshValues(responseSendStartedAt)
                 )
             } else {
+                let responseSendStartedAt = Date()
                 client.sendSectionSnapshot(
                     section,
                     correlationId: message.correlationId,
-                    completion: completeAndRefreshValues
+                    completion: completeAndRefreshValues(responseSendStartedAt)
                 )
             }
         } catch {
@@ -221,6 +242,7 @@ final class GarminIntegrationService {
         config: GarminConfig,
         correlationId: String?
     ) {
+        let refreshStartedAt = Date()
         let valueItems = Array(items
             .filter(GarminSupportedDomains.supportsStatus)
             .prefix(GarminConfig.maxSectionItems))
@@ -230,9 +252,25 @@ final class GarminIntegrationService {
 
         currentStatusSnapshotProvider(config, valueItems, false) { [weak self] freshResult in
             guard let self else { return }
+            let snapshotDurationMs = self.durationMilliseconds(since: refreshStartedAt)
             let freshValues = self.overviewValues(result: freshResult, items: valueItems)
+            GarminDiagnostics.record(.valueSnapshot, status: freshValues.isEmpty ? .skipped : .success, metadata: [
+                "phase": "visible_values",
+                "duration_ms": snapshotDurationMs,
+                "status_count": valueItems.count,
+                "id": correlationId ?? "",
+            ])
             guard !freshValues.isEmpty else { return }
-            self.sendValuesIfNeeded(freshValues, correlationId: correlationId) { _ in }
+            let sendStartedAt = Date()
+            self.sendValuesIfNeeded(freshValues, correlationId: correlationId) { commandResult in
+                GarminDiagnostics.record(.statusSend, status: commandResult.state == .success ? .success : .failed, metadata: [
+                    "phase": "visible_values",
+                    "duration_ms": self.durationMilliseconds(since: sendStartedAt),
+                    "status_count": freshValues.count,
+                    "id": correlationId ?? "",
+                    "error_code": commandResult.error?.rawValue ?? "",
+                ])
+            }
         }
     }
 
@@ -494,6 +532,46 @@ final class GarminIntegrationService {
         case let .failure(error):
             completion(.init(correlationId: correlationId, state: .failed, error: error))
         }
+    }
+
+    private func recordSectionLatency(
+        message: GarminInboundMessage,
+        result: Swift.Result<Void, GarminIntegrationError>,
+        cacheStatus: String,
+        sectionItemCount: Int,
+        requestStartedAt: Date,
+        valueItemsDurationMs: Int,
+        sectionBuildDurationMs: Int,
+        responseSendStartedAt: Date
+    ) {
+        let status: GarminDiagnostics.Status
+        let errorCode: String
+        switch result {
+        case .success:
+            status = .success
+            errorCode = ""
+        case let .failure(error):
+            status = .failed
+            errorCode = error.rawValue
+        }
+
+        GarminDiagnostics.record(.inboundMessage, status: status, metadata: [
+            "message_type": message.type.rawValue,
+            "protocol_version": message.version,
+            "id": message.correlationId ?? "",
+            "phase": "section_response",
+            "cache_status": cacheStatus,
+            "duration_ms": durationMilliseconds(since: requestStartedAt),
+            "value_items_duration_ms": valueItemsDurationMs,
+            "build_duration_ms": sectionBuildDurationMs,
+            "send_duration_ms": durationMilliseconds(since: responseSendStartedAt),
+            "section_item_count": sectionItemCount,
+            "error_code": errorCode,
+        ])
+    }
+
+    private func durationMilliseconds(since startDate: Date) -> Int {
+        max(0, Int(Date().timeIntervalSince(startDate) * 1000))
     }
 
     private func send(_ result: GarminCommandResult, completion: @escaping (GarminCommandResult) -> Void) {

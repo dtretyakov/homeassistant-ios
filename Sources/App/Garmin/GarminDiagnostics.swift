@@ -44,6 +44,12 @@ enum GarminDiagnostics {
         "sdk_result",
         "inbound_bytes",
         "outbound_bytes",
+        "phase",
+        "duration_ms",
+        "value_items_duration_ms",
+        "build_duration_ms",
+        "send_duration_ms",
+        "section_item_count",
     ]
 
     static func record(
