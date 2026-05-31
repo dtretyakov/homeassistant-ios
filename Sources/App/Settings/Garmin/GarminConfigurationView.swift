@@ -59,11 +59,11 @@ struct GarminConfigurationView: View {
             Button("OK") {}
         }
         .confirmationDialog(
-            "Unpair Garmin Watch?",
+            "Unpair Garmin watch?",
             isPresented: $isShowingUnpairConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Unpair Garmin Watch", role: .destructive) {
+            Button("Unpair Garmin watch", role: .destructive) {
                 viewModel.disconnect()
             }
             Button("Cancel", role: .cancel) {}
@@ -125,7 +125,7 @@ struct GarminConfigurationView: View {
             }
             #endif
             if isGarminPaired {
-                Button("Unpair Garmin Watch", role: .destructive) {
+                Button("Unpair Garmin watch", role: .destructive) {
                     isShowingUnpairConfirmation = true
                 }
             } else {
@@ -133,6 +133,13 @@ struct GarminConfigurationView: View {
                     viewModel.checkConnection()
                 }
                 .disabled(isPairingInProgress)
+            }
+            if isPairingInProgress {
+                Text("Open Home Assistant on the watch and keep this screen open.")
+                    .foregroundStyle(.secondary)
+            } else if !isGarminPaired {
+                Text("Select your Garmin watch, then open Home Assistant on the watch.")
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -232,11 +239,11 @@ struct GarminConfigurationView: View {
     private var pairingActionTitle: String {
         switch viewModel.connectionState {
         case .selectingDevice:
-            return "Selecting Garmin Watch..."
+            return "Selecting Garmin watch..."
         case let .waitingForWatch(deviceName):
-            return "Waiting for \(deviceName ?? "Garmin Watch")"
+            return "Waiting for \(deviceName ?? "Garmin watch")"
         default:
-            return "Pair Garmin Watch"
+            return "Pair Garmin watch"
         }
     }
 
