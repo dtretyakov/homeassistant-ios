@@ -1263,6 +1263,8 @@
 		5A01B0182F30000B00C0D019 /* GarminDiagnostics.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0172F30000B00C0D019 /* GarminDiagnostics.test.swift */; };
 		5A01B01A2F30000C00C0D019 /* GarminOutboundMessageQueue.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0192F30000C00C0D019 /* GarminOutboundMessageQueue.test.swift */; };
 		5A01B0212F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0202F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift */; };
+		5A01B0232F30002100C0D020 /* Persistence/GarminPromptOutbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0222F30002100C0D020 /* Persistence/GarminPromptOutbox.swift */; };
+		5A01B0252F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0242F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift */; };
 		5A01B0302F30003000C0D030 /* ConnectIQ in Frameworks */ = {isa = PBXBuildFile; platformFilter = ios; productRef = 5A01B0322F30003200C0D032 /* ConnectIQ */; };
 		5A01B0402F30004000C0D040 /* GarminIntegrationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B03F2F30004000C0D040 /* GarminIntegrationController.swift */; };
 		5A01B0522F30005200C0D052 /* GarminIntegrationController.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0512F30005100C0D051 /* GarminIntegrationController.test.swift */; };
@@ -3134,6 +3136,8 @@
 		5A01B0172F30000B00C0D019 /* GarminDiagnostics.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminDiagnostics.test.swift; sourceTree = "<group>"; };
 		5A01B0192F30000C00C0D019 /* GarminOutboundMessageQueue.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminOutboundMessageQueue.test.swift; sourceTree = "<group>"; };
 		5A01B0202F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminDatabaseSchema.swift; sourceTree = "<group>"; };
+		5A01B0222F30002100C0D020 /* Persistence/GarminPromptOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminPromptOutbox.swift; sourceTree = "<group>"; };
+		5A01B0242F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminPromptOutboxTable.swift; sourceTree = "<group>"; };
 		5A01B03F2F30004000C0D040 /* GarminIntegrationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminIntegrationController.swift; sourceTree = "<group>"; };
 		5A01B0512F30005100C0D051 /* GarminIntegrationController.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminIntegrationController.test.swift; sourceTree = "<group>"; };
 		5BFD0D30836C69840AB63A8A /* LoadingButton.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LoadingButton.swift; sourceTree = "<group>"; };
@@ -6683,6 +6687,8 @@
 				C1173CB3CECB91A9C691D638 /* Persistence/GarminConfigTable.swift */,
 				5A01B00B2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift */,
 				5A01B0202F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift */,
+				5A01B0222F30002100C0D020 /* Persistence/GarminPromptOutbox.swift */,
+				5A01B0242F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift */,
 				CE14A52938540225E2239103 /* GarminConnectIQClient.swift */,
 				9FCDABF7BB9E78D6BA66E7E5 /* GarminConnectIQSDKClient.swift */,
 				5A01B03F2F30004000C0D040 /* GarminIntegrationController.swift */,
@@ -9695,6 +9701,8 @@
 				B57C57B6E1E93BE3902301CD /* Persistence/GarminConfigTable.swift in Sources */,
 				5A01B00C2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift in Sources */,
 				5A01B0212F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift in Sources */,
+				5A01B0232F30002100C0D020 /* Persistence/GarminPromptOutbox.swift in Sources */,
+				5A01B0252F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift in Sources */,
 				A8C2C0AB30C015EC4BE7720E /* GarminConnectIQClient.swift in Sources */,
 				4F5EBDD1DC78D80C313FE69B /* GarminConnectIQSDKClient.swift in Sources */,
 				5A01B0402F30004000C0D040 /* GarminIntegrationController.swift in Sources */,

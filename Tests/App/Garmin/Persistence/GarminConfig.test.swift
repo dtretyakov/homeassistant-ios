@@ -7,6 +7,8 @@ struct GarminConfigTests {
     @Test func garminTablesExposeExpectedSchema() throws {
         #expect(GarminConfigTable().tableName == "garminConfig")
         #expect(GarminConfigTable().definedColumns == GarminConfigTable.Column.allCases.map(\.rawValue))
+        #expect(GarminPromptOutboxTable().tableName == "garminPromptOutbox")
+        #expect(GarminPromptOutboxTable().definedColumns == GarminPromptOutboxTable.Column.allCases.map(\.rawValue))
         #expect(GarminStatusSnapshotCacheTable().tableName == "garminStatusSnapshotCache")
         #expect(
             GarminStatusSnapshotCacheTable().definedColumns ==

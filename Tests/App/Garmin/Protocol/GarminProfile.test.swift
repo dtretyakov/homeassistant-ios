@@ -13,11 +13,28 @@ struct GarminProfileTests {
             "cid": "h125",
         ])
 
-        #expect(GarminProtocolVersion.current == 2)
+        #expect(GarminProtocolVersion.current == 3)
         #expect(getSection.type == .getSection)
         #expect(getSection.id == "root")
         #expect(getSection.etag == "r1")
         #expect(getSection.correlationId == "h125")
+        #expect(getSection.pageOffset == 0)
+        #expect(getSection.pageLimit == nil)
+    }
+
+    @Test func inboundGetMessageDecodesPaginationFields() throws {
+        let getSection = try GarminPayloadCodec.decodeInboundDictionary([
+            "t": "get",
+            "id": "area:kitchen",
+            "v": GarminProtocolVersion.current,
+            "o": 15,
+            "l": 14,
+            "cid": "h126",
+        ])
+
+        #expect(getSection.type == .getSection)
+        #expect(getSection.pageOffset == 15)
+        #expect(getSection.pageLimit == 14)
     }
 
     @Test func sectionSnapshotEncodingUsesTypeAndOmitsSectionKind() throws {
@@ -47,7 +64,11 @@ struct GarminProfileTests {
                     domain: "sc"
                 ),
             ],
-            values: [.init(id: "e_status1", value: "20 C")]
+            values: [.init(id: "e_status1", value: "20 C")],
+            pageOffset: 15,
+            pageLimit: 14,
+            previousOffset: 0,
+            nextOffset: 29
         )
         let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(.init(type: .sectionSnapshot, section: section))
         let encoded = try String(decoding: JSONSerialization.data(withJSONObject: dictionary), as: UTF8.self)
@@ -60,6 +81,10 @@ struct GarminProfileTests {
         #expect(encoded.contains("\"d\":\"sn\""))
         #expect(encoded.contains("\"d\":\"sc\""))
         #expect(encoded.contains("\"etag\":\"root-etag\""))
+        #expect(encoded.contains("\"o\":15"))
+        #expect(encoded.contains("\"l\":14"))
+        #expect(encoded.contains("\"po\":0"))
+        #expect(encoded.contains("\"no\":29"))
         #expect(encoded.contains("\"vals\""))
         #expect(encoded.contains("\"v\":\"20 C\""))
         #expect(!encoded.contains("\"kind\""))
@@ -123,7 +148,8 @@ struct GarminProfileTests {
         let message = GarminOutboundMessage(
             type: .sectionNotModified,
             id: GarminOverviewSectionID.root,
-            correlationId: "h123"
+            correlationId: "h123",
+            pageOffset: 15
         )
 
         let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(message)
@@ -131,6 +157,7 @@ struct GarminProfileTests {
 
         #expect(dictionary["t"] as? String == "same")
         #expect(dictionary["id"] as? String == GarminOverviewSectionID.root)
+        #expect(dictionary["o"] as? Int == 15)
         #expect(dictionary["cid"] as? String == "h123")
         #expect(dictionary["v"] as? Int == GarminProtocolVersion.current)
         #expect(!dictionary.keys.contains("action_result"))
@@ -169,8 +196,8 @@ struct GarminProfileTests {
 
         let dictionary = try GarminPayloadCodec.encodeOutboundDictionary(message)
 
-        #expect(GarminProtocolVersion.current == 2)
-        #expect(dictionary["v"] as? Int == 2)
+        #expect(GarminProtocolVersion.current == 3)
+        #expect(dictionary["v"] as? Int == GarminProtocolVersion.current)
         #expect(dictionary["t"] as? String == "prompt")
         #expect(dictionary["id"] as? String == "p_1")
         #expect(dictionary["cid"] as? String == "h123")
@@ -464,6 +491,103 @@ struct GarminProfileTests {
 
         #expect(section.items.first?.domain == "sn")
         #expect(section.etag != sameWithoutDomain.etag)
+    }
+
+    @Test func areaDetailPaginatesWithOffsetsAndPageSpecificEtags() throws {
+        let entities = (0..<40).map { index in
+            entity("sensor.item_\(index)", name: String(format: "Item %02d", index), domain: "sensor")
+        }
+        let source = GarminHomeOverviewSource(
+            entityProvider: { entities },
+            areaProvider: { _ in [area("kitchen", name: "Kitchen", entities: Set(entities.map(\.entityId)))] }
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let first = try #require(try source.section(
+            id: GarminOverviewSectionID.area("kitchen"),
+            config: config,
+            itemInfo: { _ in nil },
+            offset: 0,
+            limit: 15
+        ))
+        let second = try #require(try source.section(
+            id: GarminOverviewSectionID.area("kitchen"),
+            config: config,
+            itemInfo: { _ in nil },
+            offset: 15,
+            limit: 15
+        ))
+        let third = try #require(try source.section(
+            id: GarminOverviewSectionID.area("kitchen"),
+            config: config,
+            itemInfo: { _ in nil },
+            offset: 29,
+            limit: 15
+        ))
+
+        #expect(first.items.count == 15)
+        #expect(first.previousOffset == nil)
+        #expect(first.nextOffset == 15)
+        #expect(second.items.count == 14)
+        #expect(second.pageLimit == 14)
+        #expect(second.previousOffset == 0)
+        #expect(second.nextOffset == 29)
+        #expect(third.items.count == 11)
+        #expect(third.pageLimit == 15)
+        #expect(third.previousOffset == 15)
+        #expect(third.nextOffset == nil)
+        #expect(first.etag != second.etag)
+        #expect(second.etag != third.etag)
+    }
+
+    @Test func api50LastPageUsesSpareNavigationSlot() throws {
+        let entities = (0..<30).map { index in
+            entity("sensor.item_\(index)", name: String(format: "Item %02d", index), domain: "sensor")
+        }
+        let source = GarminHomeOverviewSource(
+            entityProvider: { entities },
+            areaProvider: { _ in [area("kitchen", name: "Kitchen", entities: Set(entities.map(\.entityId)))] }
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let last = try #require(try source.section(
+            id: GarminOverviewSectionID.area("kitchen"),
+            config: config,
+            itemInfo: { _ in nil },
+            offset: 15,
+            limit: 15
+        ))
+
+        #expect(last.items.count == 15)
+        #expect(last.pageLimit == 15)
+        #expect(last.previousOffset == 0)
+        #expect(last.nextOffset == nil)
+    }
+
+    @Test func pageEtagChangesOnlyForCurrentPageRows() throws {
+        let entities = (0..<20).map { index in
+            entity("sensor.item_\(index)", name: String(format: "Item %02d", index), domain: "sensor")
+        }
+        let changedOffPage = entities.enumerated().map { index, item in
+            index == 17 ? entity(item.entityId, name: item.name, domain: item.domain, deviceClass: "temperature") : item
+        }
+        let changedOnPage = entities.enumerated().map { index, item in
+            index == 1 ? entity(item.entityId, name: "Changed on page", domain: item.domain) : item
+        }
+        let config = GarminConfig(selectedServerId: "server-1")
+        func source(_ values: [HAAppEntity]) -> GarminHomeOverviewSource {
+            GarminHomeOverviewSource(
+                entityProvider: { values },
+                areaProvider: { _ in [area("kitchen", name: "Kitchen", entities: Set(values.map(\.entityId)))] }
+            )
+        }
+
+        let original = try #require(try source(entities).section(id: GarminOverviewSectionID.area("kitchen"), config: config, itemInfo: { _ in nil }, offset: 0, limit: 15))
+        let offPage = try #require(try source(changedOffPage).section(id: GarminOverviewSectionID.area("kitchen"), config: config, itemInfo: { _ in nil }, offset: 0, limit: 15))
+        let onPage = try #require(try source(changedOnPage).section(id: GarminOverviewSectionID.area("kitchen"), config: config, itemInfo: { _ in nil }, offset: 0, limit: 15))
+
+        #expect(original.etag == offPage.etag)
+        #expect(original.etag != onPage.etag)
     }
 
     private func entity(

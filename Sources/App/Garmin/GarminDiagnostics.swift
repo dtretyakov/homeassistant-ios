@@ -50,6 +50,14 @@ enum GarminDiagnostics {
         "build_duration_ms",
         "send_duration_ms",
         "section_item_count",
+        "section_id",
+        "page_offset",
+        "page_limit",
+        "previous_offset",
+        "next_offset",
+        "page_etag",
+        "skip_reason",
+        "app_state",
     ]
 
     static func record(

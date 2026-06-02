@@ -1,7 +1,7 @@
 import Foundation
 
 public enum GarminProtocolVersion {
-    public static let current = 2
+    public static let current = 3
 }
 
 public enum GarminPayloadLimits {
@@ -27,6 +27,8 @@ final class GarminValuesRevisionCounter {
 public enum GarminInboundMessageType: String, Codable, Equatable {
     case getSection = "get"
     case callAction = "call"
+    case promptAcknowledgement = "prompt_ack"
+    case promptDismissed = "prompt_dismissed"
     case promptResponse = "prompt_response"
 }
 
@@ -45,6 +47,8 @@ public struct GarminInboundMessage: Codable, Equatable {
     public let etag: String?
     public let correlationId: String?
     public let actionId: String?
+    public let pageOffset: Int
+    public let pageLimit: Int?
 
     public init(
         version: Int = GarminProtocolVersion.current,
@@ -52,7 +56,9 @@ public struct GarminInboundMessage: Codable, Equatable {
         id: String? = nil,
         etag: String? = nil,
         correlationId: String? = nil,
-        actionId: String? = nil
+        actionId: String? = nil,
+        pageOffset: Int = 0,
+        pageLimit: Int? = nil
     ) {
         self.version = version
         self.type = type
@@ -60,6 +66,8 @@ public struct GarminInboundMessage: Codable, Equatable {
         self.etag = etag
         self.correlationId = correlationId
         self.actionId = actionId
+        self.pageOffset = max(0, pageOffset)
+        self.pageLimit = pageLimit
     }
 
     enum CodingKeys: String, CodingKey {
@@ -69,6 +77,8 @@ public struct GarminInboundMessage: Codable, Equatable {
         case etag = "e"
         case correlationId = "cid"
         case actionId = "action_id"
+        case pageOffset = "o"
+        case pageLimit = "l"
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,6 +89,8 @@ public struct GarminInboundMessage: Codable, Equatable {
         etag = try container.decodeIfPresent(String.self, forKey: .etag)
         correlationId = try container.decodeIfPresent(String.self, forKey: .correlationId)
         actionId = try container.decodeIfPresent(String.self, forKey: .actionId)
+        pageOffset = max(0, try container.decodeIfPresent(Int.self, forKey: .pageOffset) ?? 0)
+        pageLimit = try container.decodeIfPresent(Int.self, forKey: .pageLimit)
     }
 }
 
@@ -92,6 +104,7 @@ public struct GarminOutboundMessage: Encodable, Equatable {
     public let valuesRevision: Int?
     public let actionResult: GarminCommandResult?
     public let prompt: GarminNotificationPrompt?
+    public let pageOffset: Int?
 
     public init(
         version: Int = GarminProtocolVersion.current,
@@ -102,7 +115,8 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         values: [GarminOverviewValue]? = nil,
         valuesRevision: Int? = nil,
         actionResult: GarminCommandResult? = nil,
-        prompt: GarminNotificationPrompt? = nil
+        prompt: GarminNotificationPrompt? = nil,
+        pageOffset: Int? = nil
     ) {
         self.version = version
         self.type = type
@@ -113,6 +127,7 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         self.valuesRevision = valuesRevision
         self.actionResult = actionResult
         self.prompt = prompt
+        self.pageOffset = pageOffset
     }
 
     enum CodingKeys: String, CodingKey {
@@ -126,6 +141,7 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         case actionResult
         case state
         case error
+        case pageOffset = "o"
         case title
         case body
         case actions
@@ -141,6 +157,7 @@ public struct GarminOutboundMessage: Encodable, Equatable {
         try container.encodeIfPresent(section, forKey: .section)
         try container.encodeIfPresent(values, forKey: .values)
         try container.encodeIfPresent(valuesRevision, forKey: .valuesRevision)
+        try container.encodeIfPresent(pageOffset, forKey: .pageOffset)
         if let prompt {
             try container.encodeIfPresent(prompt.id, forKey: .id)
             try container.encodeIfPresent(prompt.correlationId, forKey: .correlationId)

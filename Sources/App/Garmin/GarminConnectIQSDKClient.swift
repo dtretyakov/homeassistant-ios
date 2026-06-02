@@ -8,6 +8,7 @@ import ConnectIQ
 
 final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminConnectionDiagnosticsProviding {
     static let appIdentifier = "d9e1631c-a8f3-5fbe-9d16-943f96dc4560"
+    static let stateRestorationIdentifier = "io.home-assistant.garmin.connectiq"
 
     private(set) var state: GarminConnectionState = .sdkUnavailable {
         didSet {
@@ -66,10 +67,11 @@ final class GarminConnectIQSDKClient: NSObject, GarminConnectIQClient, GarminCon
 
     func sendSectionNotModified(
         sectionId: String,
+        pageOffset: Int,
         correlationId: String?,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {
-        send(.init(type: .sectionNotModified, id: sectionId, correlationId: correlationId), completion: completion)
+        send(.init(type: .sectionNotModified, id: sectionId, correlationId: correlationId, pageOffset: pageOffset), completion: completion)
     }
 
     func sendValuesDelta(
@@ -429,7 +431,11 @@ extension GarminConnectIQSDKClient: IQDeviceEventDelegate, IQAppMessageDelegate 
 private extension GarminConnectIQSDKClient {
     func initializeSDKIfNeeded() {
         guard !isInitialized else { return }
-        connectIQ.initialize(withUrlScheme: GarminFeature.connectIQURLScheme, uiOverrideDelegate: nil)
+        connectIQ.initialize(
+            withUrlScheme: GarminFeature.connectIQURLScheme,
+            uiOverrideDelegate: nil,
+            stateRestorationIdentifier: Self.stateRestorationIdentifier
+        )
         isInitialized = true
         updateDiagnostics(event: "sdk:init")
     }

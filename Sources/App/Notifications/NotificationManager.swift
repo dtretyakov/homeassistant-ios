@@ -359,13 +359,67 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
 
 private extension NotificationManager {
     func sendGarminPromptIfPossible(content: UNNotificationContent) {
-        guard GarminFeature.isEnabled, !content.userInfoActionConfigs.isEmpty else { return }
-        guard let server = Current.servers.server(for: content) else { return }
+        let actionConfigs = content.userInfoActionConfigs
+        let diagnosticsMetadata: [String: Any] = [
+            "action_count": actionConfigs.count,
+            "app_state": garminDiagnosticsApplicationState,
+        ]
+
+        guard GarminFeature.isEnabled else {
+            Current.Log.info("Garmin notification prompt skipped: feature disabled")
+            GarminDiagnostics.record(.notificationPrompt, status: .skipped, metadata: diagnosticsMetadata.merging([
+                "skip_reason": "feature_disabled",
+                "phase": "notification_manager",
+            ], uniquingKeysWith: { _, new in new }))
+            return
+        }
+
+        guard !actionConfigs.isEmpty else {
+            Current.Log.info("Garmin notification prompt skipped: no dynamic notification actions")
+            GarminDiagnostics.record(.notificationPrompt, status: .skipped, metadata: diagnosticsMetadata.merging([
+                "skip_reason": "no_actions",
+                "phase": "notification_manager",
+            ], uniquingKeysWith: { _, new in new }))
+            return
+        }
+
+        guard let server = Current.servers.server(for: content) else {
+            Current.Log.info("Garmin notification prompt skipped: no matching server")
+            GarminDiagnostics.record(.notificationPrompt, status: .skipped, metadata: diagnosticsMetadata.merging([
+                "skip_reason": "no_server",
+                "phase": "notification_manager",
+            ], uniquingKeysWith: { _, new in new }))
+            return
+        }
+
+        GarminDiagnostics.record(.notificationPrompt, status: .started, metadata: diagnosticsMetadata.merging([
+            "phase": "notification_manager",
+        ], uniquingKeysWith: { _, new in new }))
 
         Current.garminIntegrationController.sendNotificationPrompt(for: content, server: server) { result in
-            if case let .failure(error) = result {
+            switch result {
+            case .success:
+                Current.Log.info("Garmin notification prompt accepted for delivery")
+            case let .failure(error):
                 Current.Log.info("Garmin notification prompt was not sent: \(error)")
+                GarminDiagnostics.record(.notificationPrompt, status: .failed, metadata: diagnosticsMetadata.merging([
+                    "error_code": error.rawValue,
+                    "phase": "notification_manager",
+                ], uniquingKeysWith: { _, new in new }))
             }
+        }
+    }
+
+    var garminDiagnosticsApplicationState: String {
+        switch UIApplication.shared.applicationState {
+        case .active:
+            return "active"
+        case .inactive:
+            return "inactive"
+        case .background:
+            return "background"
+        @unknown default:
+            return "unknown"
         }
     }
 

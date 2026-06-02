@@ -89,7 +89,10 @@ public struct GarminOverviewSection: Codable, Equatable {
     public let etag: String
     public let items: [GarminOverviewItem]
     public let values: [GarminOverviewValue]
-    public let hasMore: Bool
+    public let pageOffset: Int
+    public let pageLimit: Int
+    public let previousOffset: Int?
+    public let nextOffset: Int?
 
     public init(
         id: String,
@@ -97,14 +100,20 @@ public struct GarminOverviewSection: Codable, Equatable {
         etag: String,
         items: [GarminOverviewItem],
         values: [GarminOverviewValue] = [],
-        hasMore: Bool = false
+        pageOffset: Int = 0,
+        pageLimit: Int = GarminConfig.maxSectionItems,
+        previousOffset: Int? = nil,
+        nextOffset: Int? = nil
     ) {
         self.id = id
         self.title = title
         self.etag = etag
-        self.items = Array(items.prefix(GarminConfig.maxSectionItems))
-        self.values = Array(values.prefix(GarminConfig.maxSectionItems))
-        self.hasMore = hasMore || items.count > GarminConfig.maxSectionItems
+        self.items = Array(items.prefix(Self.sanitizedLimit(pageLimit)))
+        self.values = values
+        self.pageOffset = max(0, pageOffset)
+        self.pageLimit = Self.sanitizedLimit(pageLimit)
+        self.previousOffset = previousOffset
+        self.nextOffset = nextOffset
     }
 
     enum CodingKeys: String, CodingKey {
@@ -113,7 +122,14 @@ public struct GarminOverviewSection: Codable, Equatable {
         case etag
         case items
         case values = "vals"
-        case hasMore = "has_more"
+        case pageOffset = "o"
+        case pageLimit = "l"
+        case previousOffset = "po"
+        case nextOffset = "no"
+    }
+
+    public static func sanitizedLimit(_ limit: Int) -> Int {
+        min(max(1, limit), GarminConfig.maxSectionItems)
     }
 }
 
@@ -301,26 +317,28 @@ final class GarminHomeOverviewSource {
         id: String,
         config: GarminConfig,
         itemInfo: (MagicItem) -> MagicItem.Info?,
-        valueProvider: ValueProvider = { _ in nil }
+        valueProvider: ValueProvider = { _ in nil },
+        offset: Int = 0,
+        limit: Int = GarminConfig.maxSectionItems
     ) throws -> GarminOverviewSection? {
         let serverId = config.selectedServerId
             ?? config.customItems.first?.serverId
         guard let serverId else { return nil }
 
         if id == GarminOverviewSectionID.root {
-            return try rootSection(config: config, itemInfo: itemInfo, serverId: serverId, valueProvider: valueProvider)
+            return try rootSection(config: config, itemInfo: itemInfo, serverId: serverId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if id == GarminOverviewSectionID.areas {
-            return try areasSection(serverId: serverId)
+            return try areasSection(serverId: serverId, offset: offset, limit: limit)
         } else if id.hasPrefix("area:") {
             let areaId = String(id.dropFirst("area:".count))
-            return try areaDetailSection(serverId: serverId, areaId: areaId, valueProvider: valueProvider)
+            return try areaDetailSection(serverId: serverId, areaId: areaId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if id == GarminOverviewSectionID.summaries || id == "summaries" {
-            return try summariesSection(serverId: serverId, valueProvider: valueProvider)
+            return try summariesSection(serverId: serverId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if id.hasPrefix("summary:") {
             let summaryId = String(id.dropFirst("summary:".count))
-            return try summaryDetailSection(serverId: serverId, summaryId: summaryId, valueProvider: valueProvider)
+            return try summaryDetailSection(serverId: serverId, summaryId: summaryId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if let custom = config.customSections.first(where: { GarminOverviewSectionID.custom($0.id) == id || "custom:\($0.id)" == id }) {
-            return customSection(id: custom.id, serverId: serverId, config: config, itemInfo: itemInfo, valueProvider: valueProvider)
+            return customSection(id: custom.id, serverId: serverId, config: config, itemInfo: itemInfo, valueProvider: valueProvider, offset: offset, limit: limit)
         }
 
         return nil
@@ -329,7 +347,9 @@ final class GarminHomeOverviewSource {
     func valueItems(
         id: String,
         config: GarminConfig,
-        itemInfo: (MagicItem) -> MagicItem.Info?
+        itemInfo: (MagicItem) -> MagicItem.Info?,
+        offset: Int = 0,
+        limit: Int = GarminConfig.maxSectionItems
     ) throws -> [MagicItem] {
         let serverId = config.selectedServerId
             ?? config.customItems.first?.serverId
@@ -339,20 +359,20 @@ final class GarminHomeOverviewSource {
             let areaId = String(id.dropFirst("area:".count))
             guard let area = try areaProvider(serverId).first(where: { $0.areaId == areaId }) else { return [] }
             let allowed = area.entities
-            return try entityProvider()
+            return pageSlice(try entityProvider()
                 .filter { $0.serverId == serverId && allowed.contains($0.entityId) && GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
                 .sorted(by: sortEntity)
-                .map(magicItem)
+                .map(magicItem), offset: offset, limit: limit)
         } else if id.hasPrefix("summary:") {
             let summaryId = String(id.dropFirst("summary:".count))
-            return try entityProvider()
+            return pageSlice(try entityProvider()
                 .filter { $0.serverId == serverId && summaryMatches(entity: $0, summaryId: summaryId) && GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
                 .sorted(by: sortEntity)
-                .map(magicItem)
+                .map(magicItem), offset: offset, limit: limit)
         } else if let custom = config.customSections.first(where: { GarminOverviewSectionID.custom($0.id) == id || "custom:\($0.id)" == id }) {
-            return custom.items
+            return pageSlice(custom.items
                 .map(\.item)
-                .filter { $0.serverId == serverId && GarminSupportedDomains.supportsStatus($0) }
+                .filter { $0.serverId == serverId && GarminSupportedDomains.supportsStatus($0) }, offset: offset, limit: limit)
         }
 
         _ = itemInfo
@@ -363,7 +383,9 @@ final class GarminHomeOverviewSource {
         config: GarminConfig,
         itemInfo: (MagicItem) -> MagicItem.Info?,
         serverId: String,
-        valueProvider: ValueProvider
+        valueProvider: ValueProvider,
+        offset: Int,
+        limit: Int
     ) throws -> GarminOverviewSection {
         var items: [GarminOverviewItem] = []
         if config.areasSectionEnabled, let section = try section(id: GarminOverviewSectionID.areas, config: config, itemInfo: itemInfo) {
@@ -378,16 +400,18 @@ final class GarminHomeOverviewSource {
                 serverId: serverId,
                 config: config,
                 itemInfo: itemInfo,
-                valueProvider: valueProvider
+                valueProvider: valueProvider,
+                offset: 0,
+                limit: GarminConfig.maxSectionItems
             ) else { continue }
             items.append(sectionItem(for: overviewSection))
         }
 
         _ = serverId
-        return overviewSection(id: GarminOverviewSectionID.root, title: "Home", items: items)
+        return overviewSection(id: GarminOverviewSectionID.root, title: "Home", items: items, offset: offset, limit: limit)
     }
 
-    private func areasSection(serverId: String) throws -> GarminOverviewSection {
+    private func areasSection(serverId: String, offset: Int, limit: Int) throws -> GarminOverviewSection {
         let items = try areaProvider(serverId).map { area in
             GarminOverviewItem(
                 id: "area:\(area.areaId)",
@@ -395,20 +419,20 @@ final class GarminHomeOverviewSource {
                 type: .section
             )
         }
-        return overviewSection(id: GarminOverviewSectionID.areas, title: "Areas", items: items)
+        return overviewSection(id: GarminOverviewSectionID.areas, title: "Areas", items: items, offset: offset, limit: limit)
     }
 
-    private func areaDetailSection(serverId: String, areaId: String, valueProvider: ValueProvider) throws -> GarminOverviewSection? {
+    private func areaDetailSection(serverId: String, areaId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection? {
         guard let area = try areaProvider(serverId).first(where: { $0.areaId == areaId }) else { return nil }
         let allowed = area.entities
         let items = try entityProvider()
             .filter { $0.serverId == serverId && allowed.contains($0.entityId) && GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
             .sorted(by: sortEntity)
             .map(statusItem)
-        return overviewSection(id: GarminOverviewSectionID.area(areaId), title: area.name, items: items, valueProvider: valueProvider)
+        return overviewSection(id: GarminOverviewSectionID.area(areaId), title: area.name, items: items, valueProvider: valueProvider, offset: offset, limit: limit)
     }
 
-    private func summariesSection(serverId: String, valueProvider: ValueProvider) throws -> GarminOverviewSection {
+    private func summariesSection(serverId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection {
         let entities = try entityProvider().filter { $0.serverId == serverId }
         let definitions = summaryDefinitions(entities: entities)
         let items = definitions.map { definition in
@@ -419,16 +443,16 @@ final class GarminHomeOverviewSource {
             )
         }
         _ = valueProvider
-        return overviewSection(id: GarminOverviewSectionID.summaries, title: "Summaries", items: items)
+        return overviewSection(id: GarminOverviewSectionID.summaries, title: "Summaries", items: items, offset: offset, limit: limit)
     }
 
-    private func summaryDetailSection(serverId: String, summaryId: String, valueProvider: ValueProvider) throws -> GarminOverviewSection {
+    private func summaryDetailSection(serverId: String, summaryId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection {
         let entities = try entityProvider().filter { $0.serverId == serverId }
         let items = summaryContributors(entities: entities, summaryId: summaryId, valueProvider: valueProvider)
             .sorted(by: sortEntity)
             .map(statusItem)
         let title = summaryTitle(summaryId)
-        return overviewSection(id: GarminOverviewSectionID.summary(summaryId), title: title, items: items, valueProvider: valueProvider)
+        return overviewSection(id: GarminOverviewSectionID.summary(summaryId), title: title, items: items, valueProvider: valueProvider, offset: offset, limit: limit)
     }
 
     private func customSection(
@@ -436,7 +460,9 @@ final class GarminHomeOverviewSource {
         serverId: String,
         config: GarminConfig,
         itemInfo: (MagicItem) -> MagicItem.Info?,
-        valueProvider: ValueProvider = { _ in nil }
+        valueProvider: ValueProvider = { _ in nil },
+        offset: Int,
+        limit: Int
     ) -> GarminOverviewSection? {
         guard let section = config.customSections.first(where: { $0.id == id }) else { return nil }
         let items = section.items.compactMap { customItem -> GarminOverviewItem? in
@@ -444,16 +470,19 @@ final class GarminHomeOverviewSource {
             guard GarminConfig.capability(for: customItem.item) > 0 else { return nil }
             return item(customItem.item, itemInfo: itemInfo)
         }
-        return overviewSection(id: GarminOverviewSectionID.custom(section.id), title: section.title, items: items, valueProvider: valueProvider)
+        return overviewSection(id: GarminOverviewSectionID.custom(section.id), title: section.title, items: items, valueProvider: valueProvider, offset: offset, limit: limit)
     }
 
     private func overviewSection(
         id: String,
         title: String,
         items: [GarminOverviewItem],
-        valueProvider: ValueProvider = { _ in nil }
+        valueProvider: ValueProvider = { _ in nil },
+        offset: Int = 0,
+        limit: Int = GarminConfig.maxSectionItems
     ) -> GarminOverviewSection {
-        let values = items.compactMap { item -> GarminOverviewValue? in
+        let page = pagedItems(items, offset: offset, limit: limit)
+        let values = page.items.compactMap { item -> GarminOverviewValue? in
             guard (item.cap ?? 0) & GarminConfig.valueCapability != 0 else { return nil }
             guard let value = valueProvider(item) else { return nil }
             return GarminOverviewValue(id: item.id, value: value)
@@ -461,10 +490,56 @@ final class GarminHomeOverviewSource {
         return GarminOverviewSection(
             id: id,
             title: title,
-            etag: etag(items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|\($0.domain ?? "")" }),
-            items: items,
-            values: values
+            etag: etag([
+                "id:\(id)",
+                "o:\(page.offset)",
+                "l:\(page.limit)",
+                "po:\(page.previousOffset.map(String.init) ?? "")",
+                "no:\(page.nextOffset.map(String.init) ?? "")",
+            ] + page.items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|\($0.domain ?? "")" }),
+            items: page.items,
+            values: values,
+            pageOffset: page.offset,
+            pageLimit: page.limit,
+            previousOffset: page.previousOffset,
+            nextOffset: page.nextOffset
         )
+    }
+
+    private func pageSlice<T>(_ items: [T], offset: Int, limit: Int) -> [T] {
+        pagedItems(items, offset: offset, limit: limit).items
+    }
+
+    private func pagedItems<T>(_ items: [T], offset: Int, limit: Int) -> (items: [T], offset: Int, limit: Int, previousOffset: Int?, nextOffset: Int?) {
+        let sanitizedLimit = GarminOverviewSection.sanitizedLimit(limit)
+        let sanitizedOffset = min(max(0, offset), items.count)
+        let realItemLimit = realItemLimit(itemsCount: items.count, offset: sanitizedOffset, limit: sanitizedLimit)
+        let endIndex = min(items.count, sanitizedOffset + realItemLimit)
+        let pageItems = Array(items[sanitizedOffset..<endIndex])
+        let previousOffset: Int?
+        if sanitizedOffset == 0 {
+            previousOffset = nil
+        } else if sanitizedOffset <= GarminConfig.maxSectionItems - 1 {
+            previousOffset = 0
+        } else {
+            previousOffset = max(0, sanitizedOffset - previousPageStep(limit: sanitizedLimit))
+        }
+        let nextOffset = endIndex < items.count ? endIndex : nil
+        return (pageItems, sanitizedOffset, realItemLimit, previousOffset, nextOffset)
+    }
+
+    private func realItemLimit(itemsCount: Int, offset: Int, limit: Int) -> Int {
+        if limit == GarminConfig.maxSectionItems - 1, offset > 0, itemsCount - offset > limit {
+            return limit - 1
+        }
+        return limit
+    }
+
+    private func previousPageStep(limit: Int) -> Int {
+        if limit == GarminConfig.maxSectionItems - 1 {
+            return limit - 1
+        }
+        return limit
     }
 
     private func sectionItem(for section: GarminOverviewSection) -> GarminOverviewItem {

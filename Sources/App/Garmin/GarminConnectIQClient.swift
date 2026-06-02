@@ -25,7 +25,7 @@ protocol GarminConnectIQClient: AnyObject {
     var statePublisher: AnyPublisher<GarminConnectionState, Never> { get }
     func setup(commandHandler: @escaping (GarminInboundMessage) -> Void)
     func sendSectionSnapshot(_ section: GarminOverviewSection, correlationId: String?, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
-    func sendSectionNotModified(sectionId: String, correlationId: String?, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
+    func sendSectionNotModified(sectionId: String, pageOffset: Int, correlationId: String?, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func sendValuesDelta(_ values: [GarminOverviewValue], valuesRevision: Int, isTransient: Bool, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func sendActionResult(_ result: GarminCommandResult, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
     func sendNotificationPrompt(_ prompt: GarminNotificationPrompt, completion: @escaping (Result<Void, GarminIntegrationError>) -> Void)
@@ -45,6 +45,7 @@ extension GarminConnectIQClient {
 
     func sendSectionNotModified(
         sectionId: String,
+        pageOffset: Int,
         correlationId: String?,
         completion: @escaping (Result<Void, GarminIntegrationError>) -> Void
     ) {

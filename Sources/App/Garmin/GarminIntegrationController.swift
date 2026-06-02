@@ -64,6 +64,13 @@ final class GarminIntegrationController: GarminIntegrationControlling {
             }
             .store(in: &cancellables)
 
+        client.statePublisher
+            .filter(\.isReady)
+            .sink { [weak self] _ in
+                self?.integrationService.flushPendingNotificationPrompts()
+            }
+            .store(in: &cancellables)
+
         if let diagnosticsProvider = client as? GarminConnectionDiagnosticsProviding {
             diagnosticsProvider.connectionDiagnosticsPublisher
                 .sink { [connectionDiagnosticsSubject] diagnostics in
@@ -122,6 +129,7 @@ final class GarminIntegrationController: GarminIntegrationControlling {
         )
         observationService.start()
         statusObservationService = observationService
+        integrationService.flushPendingNotificationPrompts()
     }
 
     func handleConnectIQURL(_ url: URL) -> Bool {

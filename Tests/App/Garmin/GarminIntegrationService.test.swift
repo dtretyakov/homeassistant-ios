@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import GRDB
 import HAKit
 @testable import HomeAssistant
 import PromiseKit
@@ -20,9 +21,10 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
     private let stateSubject = CurrentValueSubject<GarminConnectionState, Never>(.ready(deviceName: "Test Garmin"))
     var sentResults: [GarminCommandResult] = []
     var sentSections: [(section: GarminOverviewSection, correlationId: String?)] = []
-    var sentSectionNotModifiedIds: [(sectionId: String, correlationId: String?)] = []
+    var sentSectionNotModifiedIds: [(sectionId: String, pageOffset: Int, correlationId: String?)] = []
     var sentValuesDeltas: [(values: [GarminOverviewValue], revision: Int, isTransient: Bool)] = []
     var sentPrompts: [GarminNotificationPrompt] = []
+    var promptSendResult: Swift.Result<Void, GarminIntegrationError> = .success(())
     var didRequestDeviceSelection = false
     private var commandHandler: ((GarminInboundMessage) -> Void)?
 
@@ -41,10 +43,11 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
 
     func sendSectionNotModified(
         sectionId: String,
+        pageOffset: Int,
         correlationId: String?,
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
-        sentSectionNotModifiedIds.append((sectionId, correlationId))
+        sentSectionNotModifiedIds.append((sectionId, pageOffset, correlationId))
         completion(.success(()))
     }
 
@@ -71,7 +74,7 @@ final class FakeGarminConnectIQClient: GarminConnectIQClient {
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         sentPrompts.append(prompt)
-        completion(.success(()))
+        completion(promptSendResult)
     }
 
     func disconnect() {
@@ -207,6 +210,147 @@ struct GarminIntegrationServiceTests {
                 UNNotificationContent.combinedAction(base: "OPEN", appended: "2"),
             ])
             #expect(prompt.actions.map(\.label) == ["Open", "Open duplicate"])
+        }
+    }
+
+    @Test func notificationPromptAcceptsMobileAppDynamicActionField() throws {
+        try withGarminDatabase {
+            try withServer(identifier: "server-1") { server in
+                let client = FakeGarminConnectIQClient()
+                let service = GarminIntegrationService(client: client)
+                let content = notificationContent(actions: [
+                    [
+                        "action": "APARTMENT_DOOR_OPEN",
+                        "title": "Open apartment door",
+                        "icon": "sfsymbols:key",
+                    ],
+                ])
+
+                service.sendNotificationPrompt(for: content, server: server) { result in
+                    guard case .success = result else {
+                        Issue.record("Expected prompt send to succeed")
+                        return
+                    }
+                }
+
+                let prompt = try #require(client.sentPrompts.first)
+                #expect(prompt.actions.map(\.id) == ["APARTMENT_DOOR_OPEN"])
+                #expect(prompt.actions.map(\.label) == ["Open apartment door"])
+            }
+        }
+    }
+
+    @Test func notificationPromptQueuesWhenWatchIsNotReady() throws {
+        try withGarminDatabase {
+            try withServer(identifier: "server-1") { server in
+                let client = FakeGarminConnectIQClient()
+                client.state = .deviceUnavailable
+                let service = GarminIntegrationService(client: client)
+                let content = notificationContent(actions: [
+                    ["identifier": "OPEN", "title": "Open"],
+                ])
+                var promptResult: Swift.Result<Void, GarminIntegrationError>?
+
+                service.sendNotificationPrompt(for: content, server: server) { result in
+                    promptResult = result
+                }
+
+                guard case .success = promptResult else {
+                    Issue.record("Expected prompt to enqueue while watch is unavailable")
+                    return
+                }
+                #expect(client.sentPrompts.isEmpty)
+                let queued = try #require(try Current.database().read { db in
+                    try GarminPromptOutboxRecord.fetchAll(db).first?.pendingPrompt
+                })
+                #expect(queued.prompt.title == "Open front door?")
+            }
+        }
+    }
+
+    @Test func retryableNotificationPromptFailureKeepsPromptPending() throws {
+        try withGarminDatabase {
+            try withServer(identifier: "server-1") { server in
+                let client = FakeGarminConnectIQClient()
+                client.promptSendResult = .failure(.watchUnavailable)
+                let service = GarminIntegrationService(client: client)
+                let content = notificationContent(actions: [
+                    ["identifier": "OPEN", "title": "Open"],
+                ])
+                var promptResult: Swift.Result<Void, GarminIntegrationError>?
+
+                service.sendNotificationPrompt(for: content, server: server) { result in
+                    promptResult = result
+                }
+
+                guard case .success = promptResult else {
+                    Issue.record("Expected retryable prompt send failure to stay queued")
+                    return
+                }
+                let promptId = try #require(client.sentPrompts.first?.id)
+                let queued = try #require(try GarminPromptOutbox.pendingPrompt(promptId: promptId))
+                #expect(queued.prompt.actions.map(\.id) == ["OPEN"])
+            }
+        }
+    }
+
+    @Test func successfulNotificationPromptSendDoesNotRemainDueForFlush() throws {
+        try withGarminDatabase {
+            try withServer(identifier: "server-1") { server in
+                let client = FakeGarminConnectIQClient()
+                let service = GarminIntegrationService(client: client)
+                let content = notificationContent(actions: [
+                    ["identifier": "OPEN", "title": "Open"],
+                ])
+                var promptResult: Swift.Result<Void, GarminIntegrationError>?
+
+                service.sendNotificationPrompt(for: content, server: server) { result in
+                    promptResult = result
+                }
+
+                guard case .success = promptResult else {
+                    Issue.record("Expected prompt send to succeed")
+                    return
+                }
+                let promptId = try #require(client.sentPrompts.first?.id)
+                #expect(try GarminPromptOutbox.pendingPrompt(promptId: promptId) != nil)
+                #expect(try GarminPromptOutbox.pendingPrompts().isEmpty)
+            }
+        }
+    }
+
+    @Test func promptResponseAfterRestartUsesOutboxActionContext() async throws {
+        try await withGarminDatabaseAsync {
+            try await withWebhookCaptureAsync { capturedRequests in
+                let client = FakeGarminConnectIQClient()
+                let service = GarminIntegrationService(client: client)
+                let server = try #require(Current.servers.server(forServerIdentifier: "server-1"))
+                let content = notificationContent(actions: [
+                    ["identifier": "OPEN", "title": "Open"],
+                ])
+
+                service.sendNotificationPrompt(for: content, server: server) { _ in }
+                let prompt = try #require(client.sentPrompts.first)
+                let restartedService = GarminIntegrationService(client: client)
+                restartedService.handle(
+                    GarminInboundMessage(
+                        type: .promptResponse,
+                        id: prompt.id,
+                        correlationId: "c1",
+                        actionId: "OPEN"
+                    ),
+                    config: GarminConfig()
+                ) { _ in }
+
+                try await waitUntil {
+                    capturedRequests().contains { request in
+                        guard let data = request.data as? [String: Any] else { return false }
+                        return data["event_type"] as? String == "mobile_app_notification_action"
+                    }
+                }
+                let storedPrompt = try GarminPromptOutbox.pendingPrompt(promptId: prompt.id)
+                #expect(storedPrompt == nil)
+            }
         }
     }
 
@@ -375,6 +519,7 @@ struct GarminIntegrationServiceTests {
         ))
 
         #expect(client.sentSectionNotModifiedIds.first?.sectionId == GarminOverviewSectionID.custom("custom-1"))
+        #expect(client.sentSectionNotModifiedIds.first?.pageOffset == 0)
         #expect(client.sentSectionNotModifiedIds.first?.correlationId == "s1")
         #expect(client.sentValuesDeltas.count == 1)
         #expect(client.sentValuesDeltas.first?.values == [
@@ -477,6 +622,119 @@ struct GarminIntegrationServiceTests {
         #expect(client.sentValuesDeltas.map(\.values) == [
             [GarminOverviewValue(id: GarminConfig.opaqueItemId(for: item), value: "20 C")],
         ])
+    }
+
+    @Test func getSectionUsesRequestedPageForSnapshotSameAndVisibleValues() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let items = (0..<20).map { index in
+            MagicItem(id: "sensor.item_\(index)", serverId: "server-1", type: .entity, displayText: "Item \(index)")
+        }
+        let config = customConfig(statusItems: items)
+        let source = GarminHomeOverviewSource(entityProvider: { [] }, areaProvider: { _ in [] })
+        var requestedItemIds: [[String]] = []
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { source }
+        )
+        service.setup(
+            configProvider: { config },
+            statusSnapshotProvider: { _, requestedItems, cacheOnly, completion in
+                #expect(cacheOnly == false)
+                requestedItemIds.append(requestedItems.map(\.id))
+                completion(.success(GarminStatusSnapshot(statuses: requestedItems.map {
+                    .init(id: GarminConfig.opaqueItemId(for: $0), label: $0.displayText ?? $0.id, value: "ok")
+                })))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.custom("custom-1"),
+            correlationId: "s2",
+            pageOffset: 15,
+            pageLimit: 15
+        ))
+
+        let section = try #require(client.sentSections.first?.section)
+        #expect(section.pageOffset == 15)
+        #expect(section.pageLimit == 15)
+        #expect(section.previousOffset == 0)
+        #expect(section.nextOffset == nil)
+        #expect(section.items.map(\.label) == (15..<20).map { "Item \($0)" })
+        #expect(requestedItemIds == [(15..<20).map { "sensor.item_\($0)" }])
+        #expect(client.sentValuesDeltas.first?.values.map(\.id) == (15..<20).map {
+            GarminConfig.opaqueItemId(for: items[$0])
+        })
+    }
+
+    @Test func getSectionReducesPageSizeWhenSnapshotPayloadWouldBeTooLarge() throws {
+        let client = FakeGarminConnectIQClient()
+        let longLabel = String(repeating: "A", count: 900)
+        let items = (0..<8).map { index in
+            MagicItem(id: "sensor.large_\(index)", serverId: "server-1", type: .entity, displayText: "\(index)-\(longLabel)")
+        }
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { GarminHomeOverviewSource(entityProvider: { [] }, areaProvider: { _ in [] }) }
+        )
+
+        service.handle(
+            GarminInboundMessage(
+                type: .getSection,
+                id: GarminOverviewSectionID.custom("custom-1"),
+                correlationId: "s-large",
+                pageOffset: 0,
+                pageLimit: 16
+            ),
+            config: customConfig(statusItems: items)
+        ) { _ in }
+
+        let section = try #require(client.sentSections.first?.section)
+        let byteCount = try GarminPayloadCodec.encodedByteCount(GarminOutboundMessage(type: .sectionSnapshot, section: section))
+        #expect(section.items.count > 0)
+        #expect(section.items.count < items.count)
+        #expect(byteCount <= GarminPayloadLimits.outboundMessageBytes)
+    }
+
+    @Test func getSectionSameIsPageSpecific() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let items = (0..<20).map { index in
+            MagicItem(id: "sensor.item_\(index)", serverId: "server-1", type: .entity, displayText: "Item \(index)")
+        }
+        let config = customConfig(statusItems: items)
+        let source = GarminHomeOverviewSource(entityProvider: { [] }, areaProvider: { _ in [] })
+        let page = try #require(try source.section(
+            id: GarminOverviewSectionID.custom("custom-1"),
+            config: config,
+            itemInfo: { _ in nil },
+            offset: 15,
+            limit: 15
+        ))
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { source }
+        )
+        service.setup(
+            configProvider: { config },
+            statusSnapshotProvider: { _, _, _, completion in
+                completion(.success(GarminStatusSnapshot(statuses: [])))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.custom("custom-1"),
+            etag: page.etag,
+            correlationId: "s3",
+            pageOffset: 15,
+            pageLimit: 15
+        ))
+
+        #expect(client.sentSections.isEmpty)
+        #expect(client.sentSectionNotModifiedIds.first?.sectionId == GarminOverviewSectionID.custom("custom-1"))
+        #expect(client.sentSectionNotModifiedIds.first?.pageOffset == 15)
     }
 
     @Test func missingActionFailsWithoutExecuting() throws {
@@ -1032,6 +1290,26 @@ struct GarminIntegrationServiceTests {
         Current.cachedApis = [:]
 
         try body(server)
+    }
+
+    private func withGarminDatabase(_ body: () throws -> Void) throws {
+        let database = try DatabaseQueue(path: ":memory:")
+        try GarminDatabaseSchema.createIfNeeded(database: database)
+        let previousDatabase = Current.database
+        Current.database = { database }
+        defer { Current.database = previousDatabase }
+
+        try body()
+    }
+
+    private func withGarminDatabaseAsync(_ body: () async throws -> Void) async throws {
+        let database = try DatabaseQueue(path: ":memory:")
+        try GarminDatabaseSchema.createIfNeeded(database: database)
+        let previousDatabase = Current.database
+        Current.database = { database }
+        defer { Current.database = previousDatabase }
+
+        try await body()
     }
 
     private func withWebhookCapture(

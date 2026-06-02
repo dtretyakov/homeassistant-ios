@@ -25,6 +25,7 @@ final class GarminIntegrationService {
     private var currentItemInfoProvider: ItemInfoProvider?
     private var currentStatusSnapshotProvider: StatusSnapshotProvider?
     private let promptRegistry = GarminNotificationPromptRegistry()
+    private var isFlushingPrompts = false
 
     var connectionState: GarminConnectionState { client.state }
 
@@ -53,6 +54,7 @@ final class GarminIntegrationService {
         client.setup { [weak self] message in
             self?.handle(message)
         }
+        flushPendingNotificationPrompts()
     }
 
     func sync(
@@ -118,6 +120,10 @@ final class GarminIntegrationService {
             handleGetSection(message, config: config, completion: recordingCompletion)
         case .callAction:
             handleCallAction(message, config: config, completion: recordingCompletion)
+        case .promptAcknowledgement:
+            handlePromptAcknowledgement(message, completion: recordingCompletion)
+        case .promptDismissed:
+            handlePromptDismissed(message, completion: recordingCompletion)
         case .promptResponse:
             handlePromptResponse(message, completion: recordingCompletion)
         }
@@ -128,21 +134,44 @@ final class GarminIntegrationService {
         server: Server,
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
-        guard client.state.isReady else {
-            completion(.failure(error(for: client.state)))
-            return
-        }
         guard let pendingPrompt = GarminNotificationPromptBuilder.pendingPrompt(for: content, server: server) else {
             completion(.success(()))
             return
         }
 
         promptRegistry.store(pendingPrompt)
-        client.sendNotificationPrompt(pendingPrompt.prompt) { [weak self] result in
-            if case .failure = result {
-                self?.promptRegistry.remove(promptId: pendingPrompt.prompt.id)
-            }
-            completion(result)
+        do {
+            try GarminPromptOutbox.save(pendingPrompt)
+        } catch {
+            GarminDiagnostics.record(.notificationPrompt, status: .failed, metadata: [
+                "id": pendingPrompt.prompt.correlationId ?? pendingPrompt.prompt.id,
+                "error_code": GarminIntegrationError.commandFailed.rawValue,
+                "phase": "outbox_save",
+            ])
+            completion(.failure(.commandFailed))
+            return
+        }
+        sendPendingNotificationPrompt(pendingPrompt, completion: completion)
+    }
+
+    func flushPendingNotificationPrompts() {
+        guard client.state.isReady, !isFlushingPrompts else { return }
+        isFlushingPrompts = true
+
+        let pendingPrompts: [GarminPendingNotificationPrompt]
+        do {
+            pendingPrompts = try GarminPromptOutbox.pendingPrompts()
+        } catch {
+            isFlushingPrompts = false
+            GarminDiagnostics.record(.notificationPrompt, status: .failed, metadata: [
+                "phase": "outbox_load",
+                "error_code": GarminIntegrationError.commandFailed.rawValue,
+            ])
+            return
+        }
+
+        sendPendingNotificationPrompts(pendingPrompts) { [weak self] in
+            self?.isFlushingPrompts = false
         }
     }
 
@@ -163,36 +192,43 @@ final class GarminIntegrationService {
 
         let overviewSource = overviewSourceProvider()
         let itemInfo = currentItemInfoProvider ?? { _ in nil }
-        let visibleValueItems: [MagicItem]
-        let valueItemsDurationMs: Int
-
-        do {
-            let valueItemsStartedAt = Date()
-            visibleValueItems = try overviewSource.valueItems(
-                id: sectionId,
-                config: config,
-                itemInfo: itemInfo
-            )
-            valueItemsDurationMs = durationMilliseconds(since: valueItemsStartedAt)
-            updateVisibleItems(for: visibleValueItems)
-        } catch {
-            send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
-            return
-        }
+        let pageOffset = message.pageOffset
+        let pageLimit = GarminOverviewSection.sanitizedLimit(message.pageLimit ?? GarminConfig.maxSectionItems)
 
         do {
             let sectionBuildStartedAt = Date()
-            guard let section = try overviewSource.section(
+            guard let section = try pageSizedSection(
+                source: overviewSource,
                 id: sectionId,
                 config: config,
                 itemInfo: itemInfo,
-                valueProvider: { _ in nil }
+                valueProvider: { _ in nil },
+                offset: pageOffset,
+                limit: pageLimit
             ) else {
                 send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .commandFailed), completion: completion)
                 return
             }
             let sectionBuildDurationMs = durationMilliseconds(since: sectionBuildStartedAt)
             let responseCacheStatus = message.etag == section.etag ? "same" : "snapshot"
+            let visibleValueItems: [MagicItem]
+            let valueItemsDurationMs: Int
+
+            do {
+                let valueItemsStartedAt = Date()
+                visibleValueItems = try overviewSource.valueItems(
+                    id: sectionId,
+                    config: config,
+                    itemInfo: itemInfo,
+                    offset: section.pageOffset,
+                    limit: section.pageLimit
+                )
+                valueItemsDurationMs = durationMilliseconds(since: valueItemsStartedAt)
+                updateVisibleItems(for: visibleValueItems, limit: section.pageLimit)
+            } catch {
+                send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
+                return
+            }
 
             let completeAndRefreshValues: (Date) -> (Swift.Result<Void, GarminIntegrationError>) -> Void = { responseSendStartedAt in
                 { [weak self] result in
@@ -201,6 +237,7 @@ final class GarminIntegrationService {
                         message: message,
                         result: result,
                         cacheStatus: responseCacheStatus,
+                        section: section,
                         sectionItemCount: section.items.count,
                         requestStartedAt: requestStartedAt,
                         valueItemsDurationMs: valueItemsDurationMs,
@@ -212,7 +249,8 @@ final class GarminIntegrationService {
                     self.refreshValues(
                         for: visibleValueItems,
                         config: config,
-                        correlationId: message.correlationId
+                        correlationId: message.correlationId,
+                        limit: section.pageLimit
                     )
                 }
             }
@@ -221,6 +259,7 @@ final class GarminIntegrationService {
                 let responseSendStartedAt = Date()
                 client.sendSectionNotModified(
                     sectionId: section.id,
+                    pageOffset: section.pageOffset,
                     correlationId: message.correlationId,
                     completion: completeAndRefreshValues(responseSendStartedAt)
                 )
@@ -237,15 +276,48 @@ final class GarminIntegrationService {
         }
     }
 
+    private func pageSizedSection(
+        source: GarminHomeOverviewSource,
+        id: String,
+        config: GarminConfig,
+        itemInfo: (MagicItem) -> MagicItem.Info?,
+        valueProvider: @escaping GarminHomeOverviewSource.ValueProvider,
+        offset: Int,
+        limit: Int
+    ) throws -> GarminOverviewSection? {
+        var effectiveLimit = GarminOverviewSection.sanitizedLimit(limit)
+        while effectiveLimit >= 1 {
+            guard let section = try source.section(
+                id: id,
+                config: config,
+                itemInfo: itemInfo,
+                valueProvider: valueProvider,
+                offset: offset,
+                limit: effectiveLimit
+            ) else {
+                return nil
+            }
+
+            let message = GarminOutboundMessage(type: .sectionSnapshot, section: section)
+            let byteCount = (try? GarminPayloadCodec.encodedByteCount(message)) ?? Int.max
+            if byteCount <= GarminPayloadLimits.outboundMessageBytes || section.items.count <= 1 {
+                return section
+            }
+            effectiveLimit -= 1
+        }
+        return nil
+    }
+
     private func refreshValues(
         for items: [MagicItem],
         config: GarminConfig,
-        correlationId: String?
+        correlationId: String?,
+        limit: Int = GarminConfig.maxSectionItems
     ) {
         let refreshStartedAt = Date()
         let valueItems = Array(items
             .filter(GarminSupportedDomains.supportsStatus)
-            .prefix(GarminConfig.maxSectionItems))
+            .prefix(GarminOverviewSection.sanitizedLimit(limit)))
         guard !valueItems.isEmpty, let currentStatusSnapshotProvider else {
             return
         }
@@ -287,10 +359,10 @@ final class GarminIntegrationService {
         }
     }
 
-    private func updateVisibleItems(for items: [MagicItem]) {
+    private func updateVisibleItems(for items: [MagicItem], limit: Int = GarminConfig.maxSectionItems) {
         let visibleItems = items
             .filter(GarminSupportedDomains.supportsStatus)
-            .prefix(GarminConfig.maxSectionItems)
+            .prefix(GarminOverviewSection.sanitizedLimit(limit))
         visibleItems.forEach {
             GarminOverviewVisibleEntityRegistry.shared.register(item: $0)
         }
@@ -310,6 +382,73 @@ final class GarminIntegrationService {
         }
         client.sendValuesDelta(values, valuesRevision: GarminValuesRevisionCounter.shared.next(), isTransient: true) { [weak self] result in
             self?.completeTransportResult(result, correlationId: correlationId, completion: completion)
+        }
+    }
+
+    private func sendPendingNotificationPrompts(
+        _ prompts: [GarminPendingNotificationPrompt],
+        completion: @escaping () -> Void
+    ) {
+        guard let prompt = prompts.first else {
+            completion()
+            return
+        }
+
+        sendPendingNotificationPrompt(prompt) { [weak self] _ in
+            self?.sendPendingNotificationPrompts(Array(prompts.dropFirst()), completion: completion)
+        }
+    }
+
+    private func sendPendingNotificationPrompt(
+        _ pendingPrompt: GarminPendingNotificationPrompt,
+        completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
+    ) {
+        guard !pendingPrompt.isExpired else {
+            try? GarminPromptOutbox.delete(promptId: pendingPrompt.prompt.id)
+            _ = promptRegistry.remove(promptId: pendingPrompt.prompt.id)
+            completion(.success(()))
+            return
+        }
+
+        guard client.state.isReady else {
+            try? GarminPromptOutbox.recordSendFailure(promptId: pendingPrompt.prompt.id, error: .watchUnavailable)
+            completion(.success(()))
+            return
+        }
+
+        client.sendNotificationPrompt(pendingPrompt.prompt) { result in
+            switch result {
+            case .success:
+                try? GarminPromptOutbox.recordSendSuccess(promptId: pendingPrompt.prompt.id)
+                GarminDiagnostics.record(.notificationPrompt, status: .success, metadata: [
+                    "id": pendingPrompt.prompt.correlationId ?? pendingPrompt.prompt.id,
+                    "phase": "send",
+                ])
+                completion(.success(()))
+            case let .failure(error):
+                switch error {
+                case .watchUnavailable:
+                    try? GarminPromptOutbox.recordSendFailure(promptId: pendingPrompt.prompt.id, error: error)
+                    completion(.success(()))
+                case .payloadTooLarge:
+                    try? GarminPromptOutbox.delete(promptId: pendingPrompt.prompt.id)
+                    _ = self.promptRegistry.remove(promptId: pendingPrompt.prompt.id)
+                    completion(.failure(error))
+                case .commandFailed,
+                     .homeAssistantUnavailable,
+                     .loginRequired,
+                     .missingAction,
+                     .missingConfig,
+                     .missingServer,
+                     .unsupportedAction,
+                     .unsupportedProtocol,
+                     .unsupportedStatus,
+                     .entityRemoved,
+                     .sdkUnavailable:
+                    try? GarminPromptOutbox.recordSendFailure(promptId: pendingPrompt.prompt.id, error: error)
+                    completion(.failure(error))
+                }
+            }
         }
     }
 
@@ -358,16 +497,42 @@ final class GarminIntegrationService {
         }
     }
 
+    private func handlePromptAcknowledgement(
+        _ message: GarminInboundMessage,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        guard let promptId = message.id else {
+            completion(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .missingAction))
+            return
+        }
+        try? GarminPromptOutbox.markDelivered(promptId: promptId)
+        completion(.init(id: promptId, correlationId: message.correlationId, state: .success))
+    }
+
+    private func handlePromptDismissed(
+        _ message: GarminInboundMessage,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
+        guard let promptId = message.id else {
+            completion(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .missingAction))
+            return
+        }
+        try? GarminPromptOutbox.delete(promptId: promptId)
+        _ = promptRegistry.remove(promptId: promptId)
+        completion(.init(id: promptId, correlationId: message.correlationId, state: .success))
+    }
+
     private func handlePromptResponse(
         _ message: GarminInboundMessage,
         completion: @escaping (GarminCommandResult) -> Void
     ) {
         guard let promptId = message.id,
               let actionId = message.actionId,
-              let pendingPrompt = promptRegistry.remove(promptId: promptId) else {
+              let pendingPrompt = promptRegistry.remove(promptId: promptId) ?? (try? GarminPromptOutbox.pendingPrompt(promptId: promptId)) else {
             completeAction(.init(id: message.id, correlationId: message.correlationId, state: .failed, error: .missingAction), completion: completion)
             return
         }
+        try? GarminPromptOutbox.delete(promptId: promptId)
         guard !pendingPrompt.isExpired else {
             GarminDiagnostics.record(.notificationPrompt, status: .skipped, metadata: [
                 "id": message.correlationId ?? pendingPrompt.prompt.correlationId ?? "",
@@ -387,9 +552,9 @@ final class GarminIntegrationService {
         }
 
         let info = HomeAssistantAPI.PushActionInfo(
-            identifier: UNNotificationContent.uncombinedAction(from: action.identifier),
+            identifier: UNNotificationContent.uncombinedAction(from: action.id),
             category: pendingPrompt.category,
-            actionData: pendingPrompt.actionData,
+            actionData: pendingPrompt.actionDataJSONObject,
             textInput: nil
         )
         GarminDiagnostics.record(.notificationPrompt, status: .started, metadata: [
@@ -538,6 +703,7 @@ final class GarminIntegrationService {
         message: GarminInboundMessage,
         result: Swift.Result<Void, GarminIntegrationError>,
         cacheStatus: String,
+        section: GarminOverviewSection,
         sectionItemCount: Int,
         requestStartedAt: Date,
         valueItemsDurationMs: Int,
@@ -566,6 +732,12 @@ final class GarminIntegrationService {
             "build_duration_ms": sectionBuildDurationMs,
             "send_duration_ms": durationMilliseconds(since: responseSendStartedAt),
             "section_item_count": sectionItemCount,
+            "section_id": section.id,
+            "page_offset": section.pageOffset,
+            "page_limit": section.pageLimit,
+            "previous_offset": section.previousOffset ?? -1,
+            "next_offset": section.nextOffset ?? -1,
+            "page_etag": section.etag,
             "error_code": errorCode,
         ])
     }
@@ -643,22 +815,30 @@ private final class GarminNotificationPromptRegistry {
     }
 }
 
-private struct GarminPendingNotificationPrompt {
+struct GarminPendingNotificationPrompt: Codable {
     let prompt: GarminNotificationPrompt
     let createdAt: Date
     let serverIdentifier: String
     let category: String?
-    let actionData: Any?
-    let actionsById: [String: MobileAppConfigPushCategory.Action]
+    let actionData: [String: AnyCodable]?
+    let actionsById: [String: GarminPendingNotificationAction]
 
     var isExpired: Bool {
         guard let expiresAt = prompt.expiresAt else { return false }
-        return Int(Date().timeIntervalSince1970) > expiresAt
+        return Int(Current.date().timeIntervalSince1970) > expiresAt
     }
 
-    func action(for id: String) -> MobileAppConfigPushCategory.Action? {
+    var actionDataJSONObject: Any? {
+        actionData?.mapValues(\.value)
+    }
+
+    func action(for id: String) -> GarminPendingNotificationAction? {
         actionsById[id]
     }
+}
+
+struct GarminPendingNotificationAction: Codable, Equatable {
+    let id: String
 }
 
 private enum GarminNotificationPromptBuilder {
@@ -687,13 +867,16 @@ private enum GarminNotificationPromptBuilder {
             expiresAt: expiresAt(for: content)
         )
 
+        let actionData = content.userInfo["homeassistant"] as? [String: Any]
         return GarminPendingNotificationPrompt(
             prompt: prompt,
-            createdAt: Date(),
+            createdAt: Current.date(),
             serverIdentifier: server.identifier.rawValue,
             category: content.categoryIdentifier.isEmpty ? nil : content.categoryIdentifier,
-            actionData: content.userInfo["homeassistant"],
-            actionsById: Dictionary(uniqueKeysWithValues: actionConfigs.map { ($0.identifier, $0) })
+            actionData: actionData?.mapValues(AnyCodable.init),
+            actionsById: Dictionary(uniqueKeysWithValues: actionConfigs.map {
+                ($0.identifier, GarminPendingNotificationAction(id: $0.identifier))
+            })
         )
     }
 
