@@ -168,6 +168,13 @@ public extension HATypedRequest {
         ))
     }
 
+    static func frontendHomeSystemData() -> HATypedRequest<HAHomeFrontendSystemData> {
+        HATypedRequest<HAHomeFrontendSystemData>(request: .init(
+            type: .webSocket("frontend/get_system_data"),
+            data: ["key": "home"]
+        ))
+    }
+
     static func getItemFromTodoList(listId: String) -> HATypedRequest<TodoListRawResponse> {
         HATypedRequest<TodoListRawResponse>(
             request:

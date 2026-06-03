@@ -940,6 +940,8 @@
 		429C33BF2F17989F0033EF5E /* EntityPickerViewModel.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429C33BC2F17986D0033EF5E /* EntityPickerViewModel.test.swift */; };
 		429C33C22F17A7010033EF5E /* HAUsagePredictionCommonControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429C33C12F17A7010033EF5E /* HAUsagePredictionCommonControl.swift */; };
 		429C33C32F17A7010033EF5E /* HAUsagePredictionCommonControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429C33C12F17A7010033EF5E /* HAUsagePredictionCommonControl.swift */; };
+		5A01B0642F30006100C0D061 /* HAHomeFrontendSystemData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0662F30006100C0D061 /* HAHomeFrontendSystemData.swift */; };
+		5A01B0652F30006100C0D061 /* HAHomeFrontendSystemData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0662F30006100C0D061 /* HAHomeFrontendSystemData.swift */; };
 		429C72202B28D0EC00BCD558 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429C721F2B28D0EC00BCD558 /* Haptics.swift */; };
 		429C82892DCCDB0F007B03AF /* HAProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E4C9922DCC9A6600DF2813 /* HAProgressView.swift */; };
 		42A0B9362EBB82EB00E074BF /* StatusBarButtonsConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42A0B9352EBB82EB00E074BF /* StatusBarButtonsConfigurator.swift */; };
@@ -1255,6 +1257,7 @@
 		5A01B0062F30000200C0D014 /* GarminConfigurationViewModel.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0052F30000200C0D014 /* GarminConfigurationViewModel.test.swift */; };
 		5A01B0082F30000300C0D017 /* GarminStatusSnapshotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */; };
 		5A01B0612F30006000C0D060 /* GarminHomeSummaryProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0602F30006000C0D060 /* GarminHomeSummaryProvider.swift */; };
+		5A01B0632F30006100C0D061 /* GarminHomeFavoritesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0622F30006100C0D061 /* GarminHomeFavoritesProvider.swift */; };
 		5A01B00A2F30000400C0D017 /* Persistence/GarminStatusSnapshotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0092F30000400C0D017 /* Persistence/GarminStatusSnapshotCache.swift */; };
 		5A01B00C2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B00B2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift */; };
 		5A01B00E2F30000600C0D017 /* GarminStatusSnapshotService.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B00D2F30000600C0D017 /* GarminStatusSnapshotService.test.swift */; };
@@ -2694,6 +2697,7 @@
 		429C07712FAB2D31000302D1 /* CarPlayAssistSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlayAssistSettingsView.swift; sourceTree = "<group>"; };
 		429C33BC2F17986D0033EF5E /* EntityPickerViewModel.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityPickerViewModel.test.swift; sourceTree = "<group>"; };
 		429C33C12F17A7010033EF5E /* HAUsagePredictionCommonControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HAUsagePredictionCommonControl.swift; sourceTree = "<group>"; };
+		5A01B0662F30006100C0D061 /* HAHomeFrontendSystemData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HAHomeFrontendSystemData.swift; sourceTree = "<group>"; };
 		429C721F2B28D0EC00BCD558 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
 		42A0B9352EBB82EB00E074BF /* StatusBarButtonsConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarButtonsConfigurator.swift; sourceTree = "<group>"; };
 		42A186092E1D310D004B729A /* HATextField.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HATextField.test.swift; sourceTree = "<group>"; };
@@ -3129,6 +3133,7 @@
 		5A01B0052F30000200C0D014 /* GarminConfigurationViewModel.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfigurationViewModel.test.swift; sourceTree = "<group>"; };
 		5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminStatusSnapshotService.swift; sourceTree = "<group>"; };
 		5A01B0602F30006000C0D060 /* GarminHomeSummaryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminHomeSummaryProvider.swift; sourceTree = "<group>"; };
+		5A01B0622F30006100C0D061 /* GarminHomeFavoritesProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminHomeFavoritesProvider.swift; sourceTree = "<group>"; };
 		5A01B0092F30000400C0D017 /* Persistence/GarminStatusSnapshotCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminStatusSnapshotCache.swift; sourceTree = "<group>"; };
 		5A01B00B2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminStatusSnapshotCacheTable.swift; sourceTree = "<group>"; };
 		5A01B00D2F30000600C0D017 /* GarminStatusSnapshotService.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminStatusSnapshotService.test.swift; sourceTree = "<group>"; };
@@ -5627,6 +5632,7 @@
 			children = (
 				42333ADA2D0B1771001E8408 /* EntityRegistryListForDisplay.swift */,
 				42F1DA6F2B4EE2E8002729BC /* HAAreasRegistryResponse.swift */,
+				5A01B0662F30006100C0D061 /* HAHomeFrontendSystemData.swift */,
 				429C33C12F17A7010033EF5E /* HAUsagePredictionCommonControl.swift */,
 			);
 			path = Models;
@@ -6697,6 +6703,7 @@
 				11F4BAD806620639E2C09698 /* GarminIntegrationService.swift */,
 				5A01B0012F30000100C0D013 /* GarminEntityDiscoveryService.swift */,
 				5A01B0602F30006000C0D060 /* GarminHomeSummaryProvider.swift */,
+				5A01B0622F30006100C0D061 /* GarminHomeFavoritesProvider.swift */,
 				5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */,
 				5A01B0112F30000800C0D017 /* GarminStatusObservationService.swift */,
 				5A01B0152F30000A00C0D019 /* GarminDiagnostics.swift */,
@@ -9712,6 +9719,7 @@
 				16B123FA47FBC684C9136FE2 /* GarminIntegrationService.swift in Sources */,
 				5A01B0022F30000100C0D013 /* GarminEntityDiscoveryService.swift in Sources */,
 				5A01B0612F30006000C0D060 /* GarminHomeSummaryProvider.swift in Sources */,
+				5A01B0632F30006100C0D061 /* GarminHomeFavoritesProvider.swift in Sources */,
 				5A01B0082F30000300C0D017 /* GarminStatusSnapshotService.swift in Sources */,
 				5A01B0122F30000800C0D017 /* GarminStatusObservationService.swift in Sources */,
 				5A01B0162F30000A00C0D019 /* GarminDiagnostics.swift in Sources */,
@@ -10040,6 +10048,7 @@
 				B672333F225DB68B0031D629 /* WebSocketMessage.swift in Sources */,
 				11AF4D1A249C8253006C74C0 /* PedometerSensor.swift in Sources */,
 				1117FB4D250C5F7C00895C13 /* DeviceBattery.swift in Sources */,
+				5A01B0652F30006100C0D061 /* HAHomeFrontendSystemData.swift in Sources */,
 				429C33C32F17A7010033EF5E /* HAUsagePredictionCommonControl.swift in Sources */,
 				42070EEC2BAC517A0031E96F /* AssistInAppIntentHandler.swift in Sources */,
 				11B38EF9275C54A300205C7B /* RenderTemplateIntentHandler.swift in Sources */,
@@ -10566,6 +10575,7 @@
 				B6A258482232539900ADD202 /* WebhookUpdateLocation.swift in Sources */,
 				B6B74CBA2283983800D58A68 /* CLKComplication+Strings.swift in Sources */,
 				119385A4249E8E360097F497 /* StorageSensor.swift in Sources */,
+				5A01B0642F30006100C0D061 /* HAHomeFrontendSystemData.swift in Sources */,
 				429C33C22F17A7010033EF5E /* HAUsagePredictionCommonControl.swift in Sources */,
 				D05A4D32216DD206009FD1EB /* MJPEGStreamer.swift in Sources */,
 				42B2637F2E16A1DC0042DF10 /* BaseColors.swift in Sources */,

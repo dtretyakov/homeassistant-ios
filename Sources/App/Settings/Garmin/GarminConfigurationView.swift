@@ -147,6 +147,13 @@ struct GarminConfigurationView: View {
     private var overviewSectionsSection: some View {
         Section {
             Toggle(
+                "Favorites",
+                isOn: Binding(
+                    get: { viewModel.config.favoritesSectionEnabled },
+                    set: { viewModel.setFavoritesSectionEnabled($0) }
+                )
+            )
+            Toggle(
                 "Areas",
                 isOn: Binding(
                     get: { viewModel.config.areasSectionEnabled },

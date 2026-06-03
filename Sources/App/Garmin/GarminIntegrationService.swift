@@ -195,7 +195,7 @@ final class GarminIntegrationService {
         let pageOffset = message.pageOffset
         let pageLimit = GarminOverviewSection.sanitizedLimit(message.pageLimit ?? GarminConfig.maxSectionItems)
 
-        prefetchSummaryStatesIfNeeded(sectionId: sectionId, config: config) { [weak self] in
+        prefetchBuiltInSectionDataIfNeeded(sectionId: sectionId, config: config) { [weak self] in
             self?.sendSectionResponse(
                 message: message,
                 config: config,
@@ -207,6 +207,112 @@ final class GarminIntegrationService {
                 requestStartedAt: requestStartedAt,
                 completion: completion
             )
+        }
+    }
+
+    private func prefetchBuiltInSectionDataIfNeeded(
+        sectionId: String,
+        config: GarminConfig,
+        completion: @escaping () -> Void
+    ) {
+        prefetchFavoritesIfNeeded(sectionId: sectionId, config: config) {
+            self.prefetchSummaryStatesIfNeeded(sectionId: sectionId, config: config, completion: completion)
+        }
+    }
+
+    private func prefetchFavoritesIfNeeded(
+        sectionId: String,
+        config: GarminConfig,
+        completion: @escaping () -> Void
+    ) {
+        guard sectionId == GarminOverviewSectionID.root || sectionId == GarminOverviewSectionID.favorites else {
+            completion()
+            return
+        }
+        guard config.favoritesSectionEnabled else {
+            completion()
+            return
+        }
+        guard let serverId = config.selectedServerId ?? config.customItems.first?.serverId else {
+            completion()
+            return
+        }
+        guard GarminHomeFavoritesCache.shared.freshEntry(serverId: serverId) == nil else {
+            completion()
+            return
+        }
+        guard GarminHomeFavoritesCache.shared.beginResolve(serverId: serverId, completion: completion) else {
+            return
+        }
+        let completeFavoritesResolve = {
+            GarminHomeFavoritesCache.shared.completeResolve(serverId: serverId)
+        }
+        guard let server = Current.servers.server(forServerIdentifier: serverId),
+              let connection = Current.api(for: server)?.connection else {
+            completeFavoritesResolve()
+            return
+        }
+
+        let gate = GarminOneShotCompletion(completeFavoritesResolve)
+        delayedWorkScheduler(1.0) {
+            gate.complete()
+        }
+
+        connection.send(.frontendHomeSystemData()) { result in
+            let strategy: GarminHomeFavoritesStrategy
+            switch result {
+            case let .success(response):
+                strategy = GarminHomeFavoritesStrategy(response)
+            case .failure:
+                strategy = GarminHomeFavoritesStrategy()
+            }
+            self.resolveFavorites(
+                connection: connection,
+                serverId: serverId,
+                strategy: strategy,
+                completion: {
+                    gate.complete()
+                }
+            )
+        }
+    }
+
+    private func resolveFavorites(
+        connection: HAConnection,
+        serverId: String,
+        strategy: GarminHomeFavoritesStrategy,
+        completion: @escaping () -> Void
+    ) {
+        let entities = (try? HAAppEntity.config(include: [.hidden])) ?? []
+        let resolver = GarminHomeFavoritesResolver()
+        let pinnedEntityIds = resolver.pinnedEntityIds(
+            serverId: serverId,
+            entities: entities,
+            strategy: strategy
+        )
+        let limit = max(GarminHomeFavoritesCache.defaultLimit, pinnedEntityIds.count)
+        guard !strategy.hideSuggestedEntities, pinnedEntityIds.count < limit else {
+            GarminHomeFavoritesCache.shared.setEntry(.init(entityIds: pinnedEntityIds), serverId: serverId)
+            completion()
+            return
+        }
+
+        connection.send(.usagePredictionCommonControl()) { result in
+            let predictedEntityIds: [String]
+            switch result {
+            case let .success(response):
+                predictedEntityIds = response.entities
+            case .failure:
+                predictedEntityIds = []
+            }
+            let entityIds = resolver.resolvedEntityIds(
+                serverId: serverId,
+                entities: entities,
+                strategy: strategy,
+                predictedEntityIds: predictedEntityIds
+            )
+            GarminHomeFavoritesCache.shared.setEntry(.init(entityIds: entityIds), serverId: serverId)
+            completion()
         }
     }
 

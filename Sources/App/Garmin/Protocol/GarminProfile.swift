@@ -57,6 +57,7 @@ public struct GarminStatusValue: Codable, Equatable {
 
 public enum GarminOverviewSectionID {
     public static let root = "root"
+    public static let favorites = "fav"
     public static let areas = "areas"
     public static let summaries = "sum"
 
@@ -304,15 +305,18 @@ final class GarminHomeOverviewSource {
 
     private let entityProvider: EntityProvider
     private let areaProvider: AreaProvider
+    private let favoritesProvider: GarminHomeFavoritesProviding
     private let summaryProvider: GarminHomeSummaryProviding
 
     init(
         entityProvider: @escaping EntityProvider = { try HAAppEntity.config() },
         areaProvider: @escaping AreaProvider = { serverId in try AppArea.fetchAreas(for: serverId) },
+        favoritesProvider: GarminHomeFavoritesProviding = GarminHomeFavoritesProvider(),
         summaryProvider: GarminHomeSummaryProviding = GarminHomeSummaryProvider()
     ) {
         self.entityProvider = entityProvider
         self.areaProvider = areaProvider
+        self.favoritesProvider = favoritesProvider
         self.summaryProvider = summaryProvider
     }
 
@@ -330,6 +334,8 @@ final class GarminHomeOverviewSource {
 
         if id == GarminOverviewSectionID.root {
             return try rootSection(config: config, itemInfo: itemInfo, serverId: serverId, valueProvider: valueProvider, offset: offset, limit: limit)
+        } else if id == GarminOverviewSectionID.favorites {
+            return try favoritesSection(serverId: serverId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if id == GarminOverviewSectionID.areas {
             return try areasSection(serverId: serverId, offset: offset, limit: limit)
         } else if id.hasPrefix("area:") {
@@ -360,7 +366,11 @@ final class GarminHomeOverviewSource {
             ?? config.customItems.first?.serverId
         guard let serverId else { return [] }
 
-        if id.hasPrefix("area:") {
+        if id == GarminOverviewSectionID.favorites {
+            return pageSlice(try favoritesProvider.favorites(serverId: serverId, entities: entityProvider())
+                .filter { GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
+                .map(magicItem), offset: offset, limit: limit)
+        } else if id.hasPrefix("area:") {
             let areaId = String(id.dropFirst("area:".count))
             guard let area = try areaProvider(serverId).first(where: { $0.areaId == areaId }) else { return [] }
             let allowed = area.entities
@@ -398,6 +408,15 @@ final class GarminHomeOverviewSource {
         limit: Int
     ) throws -> GarminOverviewSection {
         var items: [GarminOverviewItem] = []
+        if config.favoritesSectionEnabled,
+           let section = try section(
+               id: GarminOverviewSectionID.favorites,
+               config: config,
+               itemInfo: itemInfo
+           ),
+           !section.items.isEmpty {
+            items.append(sectionItem(for: section))
+        }
         if config.areasSectionEnabled, let section = try section(id: GarminOverviewSectionID.areas, config: config, itemInfo: itemInfo) {
             items.append(sectionItem(for: section))
         }
@@ -419,6 +438,24 @@ final class GarminHomeOverviewSource {
 
         _ = serverId
         return overviewSection(id: GarminOverviewSectionID.root, title: "Home", items: items, offset: offset, limit: limit)
+    }
+
+    private func favoritesSection(
+        serverId: String,
+        valueProvider: ValueProvider,
+        offset: Int,
+        limit: Int
+    ) throws -> GarminOverviewSection {
+        let items = try favoritesProvider.favorites(serverId: serverId, entities: entityProvider())
+            .map(statusItem)
+        return overviewSection(
+            id: GarminOverviewSectionID.favorites,
+            title: "Favorites",
+            items: items,
+            valueProvider: valueProvider,
+            offset: offset,
+            limit: limit
+        )
     }
 
     private func areasSection(serverId: String, offset: Int, limit: Int) throws -> GarminOverviewSection {

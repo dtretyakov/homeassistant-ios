@@ -154,6 +154,12 @@ final class GarminConfigurationViewModel: ObservableObject {
         save(syncAfterSave: true)
     }
 
+    func setFavoritesSectionEnabled(_ isEnabled: Bool) {
+        ensureSelectedServerConfig()
+        config.favoritesSectionEnabled = isEnabled
+        save(syncAfterSave: true)
+    }
+
     func setSummariesSectionEnabled(_ isEnabled: Bool) {
         ensureSelectedServerConfig()
         config.summariesSectionEnabled = isEnabled

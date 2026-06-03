@@ -1,4 +1,5 @@
 import Foundation
+import HAKit
 @testable import HomeAssistant
 @testable import Shared
 import Testing
@@ -245,6 +246,7 @@ struct GarminProfileTests {
     }
 
     @Test func rootSectionBuildsBuiltInsAndCustomSectionsAsSameSectionItems() throws {
+        let favorite = entity("light.favorite", name: "Favorite light", domain: "light")
         let custom = GarminCustomSection(
             id: "downstairs",
             title: "Downstairs",
@@ -259,20 +261,23 @@ struct GarminProfileTests {
         let source = GarminHomeOverviewSource(
             entityProvider: {
                 [
+                    favorite,
                     entity("light.kitchen", name: "Kitchen light", domain: "light"),
                     entity("binary_sensor.front_door", name: "Front door", domain: "binary_sensor", deviceClass: "door"),
                 ]
             },
             areaProvider: { _ in
                 [area("kitchen", name: "Kitchen", entities: ["light.kitchen"])]
-            }
+            },
+            favoritesProvider: fakeFavoritesProvider([favorite])
         )
 
         let root = try #require(try source.section(id: GarminOverviewSectionID.root, config: config, itemInfo: { _ in nil }))
 
         #expect(root.id == GarminOverviewSectionID.root)
-        #expect(root.items.map(\.type) == [.section, .section, .section])
+        #expect(root.items.map(\.type) == [.section, .section, .section, .section])
         #expect(root.items.map(\.id) == [
+            GarminOverviewSectionID.favorites,
             GarminOverviewSectionID.areas,
             GarminOverviewSectionID.summaries,
             GarminOverviewSectionID.custom(custom.id),
@@ -283,7 +288,8 @@ struct GarminProfileTests {
         let custom = GarminCustomSection(id: "empty", title: "Empty", items: [])
         let source = GarminHomeOverviewSource(
             entityProvider: { [] },
-            areaProvider: { _ in [] }
+            areaProvider: { _ in [] },
+            favoritesProvider: fakeFavoritesProvider([])
         )
         let config = GarminConfig(
             selectedServerId: "server-1",
@@ -297,6 +303,19 @@ struct GarminProfileTests {
             GarminOverviewSectionID.summaries,
             GarminOverviewSectionID.custom(custom.id),
         ])
+    }
+
+    @Test func rootSectionOmitsFavoritesWhenPredictionHasNoUsableRows() throws {
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [entity("light.kitchen", name: "Kitchen", domain: "light")] },
+            areaProvider: { _ in [] },
+            favoritesProvider: fakeFavoritesProvider([])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let root = try #require(try source.section(id: GarminOverviewSectionID.root, config: config, itemInfo: { _ in nil }))
+
+        #expect(!root.items.map(\.id).contains(GarminOverviewSectionID.favorites))
     }
 
     @Test func customSectionFiltersItemsToSelectedServer() throws {
@@ -411,6 +430,170 @@ struct GarminProfileTests {
         #expect(lights.items.map(\.label) == ["Kitchen"])
         #expect(lights.items.map(\.domain) == ["l"])
         #expect(lights.values.isEmpty)
+    }
+
+    @Test func favoritesSectionBuildsDirectRowsAndVisibleValueItems() throws {
+        let light = entity("light.kitchen", name: "Kitchen", domain: "light")
+        let scene = entity("scene.movie", name: "Movie", domain: "scene")
+        let values = [
+            GarminConfig.opaqueEntityId(serverId: "server-1", entityId: light.entityId): "on",
+        ]
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [light, scene] },
+            areaProvider: { _ in [] },
+            favoritesProvider: fakeFavoritesProvider([light, scene])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.favorites,
+            config: config,
+            itemInfo: { _ in nil },
+            valueProvider: { values[$0.id] }
+        ))
+        let valueItems = try source.valueItems(id: GarminOverviewSectionID.favorites, config: config, itemInfo: { _ in nil })
+
+        #expect(section.title == "Favorites")
+        #expect(section.items.map(\.type) == [.item, .item])
+        #expect(section.items.map(\.cap) == [
+            GarminConfig.valueCapability | GarminConfig.actionCapability,
+            GarminConfig.actionCapability,
+        ])
+        #expect(section.items.map(\.domain) == ["l", "sc"])
+        #expect(section.values == [
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: light.entityId), value: "on"),
+        ])
+        #expect(valueItems.map(\.id) == [light.entityId])
+    }
+
+    @Test func homeFrontendSystemDataDecodesFavorites() throws {
+        let config = try HAHomeFrontendSystemData(data: .dictionary([
+            "value": [
+                "favorite_entities": ["lock.primary"],
+                "hide_suggested_entities": true,
+            ],
+        ]))
+
+        #expect(config.favoriteEntities == ["lock.primary"])
+        #expect(config.hideSuggestedEntities)
+    }
+
+    @Test func homeFrontendSystemDataFallsBackForMalformedResponse() throws {
+        let config = try HAHomeFrontendSystemData(data: .dictionary([
+            "favorite_entities": ["light.ignored"],
+            "hide_suggested_entities": true,
+        ]))
+
+        #expect(config.favoriteEntities.isEmpty)
+        #expect(!config.hideSuggestedEntities)
+    }
+
+    @Test func favoritesResolverKeepsPinnedFirstAndFiltersSuggestedRows() throws {
+        let entities = [
+            entity("switch.hidden", name: "Hidden", domain: "switch"),
+            entity("light.first", name: "First", domain: "light"),
+            entity("sensor.status", name: "Status", domain: "sensor"),
+            entity("button.unsupported", name: "Unsupported", domain: "button"),
+            entity("light.disabled", name: "Disabled", domain: "light"),
+            entity("light.extra", name: "Extra", domain: "light"),
+        ]
+        let resolver = GarminHomeFavoritesResolver(
+            registryProvider: { _ in [
+                registry(entityId: "switch.hidden", hiddenBy: "user"),
+                registry(entityId: "light.disabled", disabledBy: "integration"),
+            ] },
+            defaultLimit: 3
+        )
+
+        let favorites = resolver.resolvedEntityIds(
+            serverId: "server-1",
+            entities: entities,
+            strategy: .init(favoriteEntities: ["switch.hidden", "light.disabled"]),
+            predictedEntityIds: [
+                "light.first",
+                "missing.entity",
+                "sensor.status",
+                "button.unsupported",
+                "switch.hidden",
+                "light.disabled",
+                "light.first",
+                "light.extra",
+            ]
+        )
+
+        #expect(favorites == ["switch.hidden", "light.first", "sensor.status"])
+    }
+
+    @Test func favoritesResolverKeepsHomePinnedOrderBeforeSuggestedRows() throws {
+        let entities = [
+            entity("lock.primary", name: "Primary lock", domain: "lock"),
+            entity("lock.secondary", name: "Secondary lock", domain: "lock"),
+            entity("light.hall", name: "Hall light", domain: "light"),
+            entity("light.room", name: "Room light", domain: "light"),
+            entity("cover.room", name: "Room cover", domain: "cover"),
+        ]
+        let resolver = GarminHomeFavoritesResolver(registryProvider: { _ in [] })
+
+        let favorites = resolver.resolvedEntityIds(
+            serverId: "server-1",
+            entities: entities,
+            strategy: .init(favoriteEntities: [
+                "lock.primary",
+                "lock.secondary",
+            ]),
+            predictedEntityIds: [
+                "light.hall",
+                "light.room",
+                "cover.room",
+                "lock.secondary",
+            ]
+        )
+
+        #expect(favorites == [
+            "lock.primary",
+            "lock.secondary",
+            "light.hall",
+            "light.room",
+            "cover.room",
+        ])
+    }
+
+    @Test func favoritesResolverExpandsLimitForPinnedRowsAndCanHideSuggestions() throws {
+        let entities = (0..<10).map { index in
+            entity("light.pinned_\(index)", name: "Pinned \(index)", domain: "light")
+        } + [
+            entity("light.suggested", name: "Suggested", domain: "light"),
+        ]
+        let pinned = entities.prefix(10).map(\.entityId)
+        let resolver = GarminHomeFavoritesResolver(defaultLimit: 8)
+
+        let favorites = resolver.resolvedEntityIds(
+            serverId: "server-1",
+            entities: entities,
+            strategy: .init(favoriteEntities: Array(pinned), hideSuggestedEntities: true),
+            predictedEntityIds: ["light.suggested"]
+        )
+
+        #expect(favorites == Array(pinned))
+    }
+
+    @Test func favoritesResolverSkipsSuggestedRowsWhenRegistryUnavailable() throws {
+        let entities = [
+            entity("light.pinned", name: "Pinned", domain: "light"),
+            entity("light.suggested", name: "Suggested", domain: "light"),
+        ]
+        let resolver = GarminHomeFavoritesResolver(
+            registryProvider: { _ in throw NSError(domain: "test", code: 1) }
+        )
+
+        let favorites = resolver.resolvedEntityIds(
+            serverId: "server-1",
+            entities: entities,
+            strategy: .init(favoriteEntities: ["light.pinned"]),
+            predictedEntityIds: ["light.suggested"]
+        )
+
+        #expect(favorites == ["light.pinned"])
     }
 
     @Test func summaryProviderBuildsCanonicalListWithPanelAndRegistryFilters() throws {
@@ -836,6 +1019,10 @@ struct GarminProfileTests {
         )
     }
 
+    private func fakeFavoritesProvider(_ favorites: [HAAppEntity]) -> GarminHomeFavoritesProviding {
+        FakeGarminHomeFavoritesProvider(favorites: favorites)
+    }
+
     private func panel(_ path: String) -> AppPanel {
         AppPanel(
             serverId: "server-1",
@@ -877,5 +1064,17 @@ struct GarminProfileTests {
             translationKey: nil,
             hasEntityName: nil
         ))
+    }
+}
+
+private struct FakeGarminHomeFavoritesProvider: GarminHomeFavoritesProviding {
+    let favoriteEntities: [HAAppEntity]
+
+    init(favorites: [HAAppEntity]) {
+        favoriteEntities = favorites
+    }
+
+    func favorites(serverId: String, entities: [HAAppEntity]) throws -> [HAAppEntity] {
+        favoriteEntities.filter { $0.serverId == serverId }
     }
 }

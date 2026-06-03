@@ -918,6 +918,277 @@ struct GarminIntegrationServiceTests {
         ])
     }
 
+    @Test func getRootPrefetchesFavoritesBeforeBuildingSection() async throws {
+        GarminHomeFavoritesCache.shared.clear()
+        defer { GarminHomeFavoritesCache.shared.clear() }
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let favorite = HAAppEntity(
+                id: "server-1-light.kitchen",
+                entityId: "light.kitchen",
+                serverId: "server-1",
+                domain: "light",
+                name: "Kitchen",
+                icon: nil,
+                rawDeviceClass: nil
+            )
+            try saveAppEntities([favorite])
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [favorite] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.root, correlationId: "fav-root"))
+            try await waitUntil { !connection.pendingRequests.isEmpty }
+
+            let request = try #require(connection.pendingRequests.first)
+            #expect(request.request.type == .webSocket("frontend/get_system_data"))
+            request.completion(.success(homeSystemDataResponse(favorites: ["light.kitchen"], hideSuggested: true)))
+            try await waitUntil { !client.sentSections.isEmpty }
+
+            #expect(client.sentSections.first?.section.items.first?.id == GarminOverviewSectionID.favorites)
+        }
+    }
+
+    @Test func getRootFetchesPredictionAfterFrontendHomeDefaults() async throws {
+        GarminHomeFavoritesCache.shared.clear()
+        defer { GarminHomeFavoritesCache.shared.clear() }
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let favorite = HAAppEntity(
+                id: "server-1-light.kitchen",
+                entityId: "light.kitchen",
+                serverId: "server-1",
+                domain: "light",
+                name: "Kitchen",
+                icon: nil,
+                rawDeviceClass: nil
+            )
+            try saveAppEntities([favorite])
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [favorite] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.root, correlationId: "fav-root"))
+            try await waitUntil { connection.pendingRequests.count >= 1 }
+            #expect(connection.pendingRequests[0].request.type == .webSocket("frontend/get_system_data"))
+            connection.pendingRequests[0].completion(.success(homeSystemDataResponse(favorites: [], hideSuggested: false)))
+            try await waitUntil { connection.pendingRequests.count >= 2 }
+
+            let predictionRequest = connection.pendingRequests[1]
+            #expect(predictionRequest.request.type == .webSocket("usage_prediction/common_control"))
+            predictionRequest.completion(.success(.dictionary(["entities": ["light.kitchen"]])))
+            try await waitUntil { !client.sentSections.isEmpty }
+
+            #expect(client.sentSections.first?.section.items.first?.id == GarminOverviewSectionID.favorites)
+        }
+    }
+
+    @Test func getRootUsesFreshFavoritesCacheWithoutRepeatedWSRequests() async throws {
+        GarminHomeFavoritesCache.shared.clear()
+        defer { GarminHomeFavoritesCache.shared.clear() }
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let favorite = HAAppEntity(
+                id: "server-1-light.kitchen",
+                entityId: "light.kitchen",
+                serverId: "server-1",
+                domain: "light",
+                name: "Kitchen",
+                icon: nil,
+                rawDeviceClass: nil
+            )
+            try saveAppEntities([favorite])
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [favorite] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.root, correlationId: "first"))
+            try await waitUntil { !connection.pendingRequests.isEmpty }
+            connection.pendingRequests[0].completion(.success(homeSystemDataResponse(favorites: ["light.kitchen"], hideSuggested: true)))
+            try await waitUntil { client.sentSections.count == 1 }
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.favorites, correlationId: "second"))
+            try await waitUntil { client.sentSections.count == 2 }
+
+            #expect(connection.pendingRequests.count == 1)
+        }
+    }
+
+    @Test func concurrentRootAndFavoritesRequestsShareFavoritesPrefetch() async throws {
+        GarminHomeFavoritesCache.shared.clear()
+        defer { GarminHomeFavoritesCache.shared.clear() }
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let favorite = HAAppEntity(
+                id: "server-1-light.kitchen",
+                entityId: "light.kitchen",
+                serverId: "server-1",
+                domain: "light",
+                name: "Kitchen",
+                icon: nil,
+                rawDeviceClass: nil
+            )
+            try saveAppEntities([favorite])
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [favorite] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.root, correlationId: "root"))
+            try await waitUntil { connection.pendingRequests.count == 1 }
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.favorites, correlationId: "fav"))
+            try await Task.sleep(nanoseconds: 1_000_000)
+
+            #expect(connection.pendingRequests.count == 1)
+
+            connection.pendingRequests[0].completion(.success(homeSystemDataResponse(favorites: ["light.kitchen"], hideSuggested: true)))
+            try await waitUntil { client.sentSections.count == 2 }
+
+            #expect(connection.pendingRequests.count == 1)
+            #expect(client.sentSections.map(\.section.id) == [
+                GarminOverviewSectionID.root,
+                GarminOverviewSectionID.favorites,
+            ])
+        }
+    }
+
+    @Test func getRootCachesEmptyFavoritesResultWithoutRepeatedWSRequests() async throws {
+        GarminHomeFavoritesCache.shared.clear()
+        defer { GarminHomeFavoritesCache.shared.clear() }
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+            let source = GarminHomeOverviewSource(entityProvider: { [] }, areaProvider: { _ in [] })
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.root, correlationId: "first"))
+            try await waitUntil { connection.pendingRequests.count >= 1 }
+            connection.pendingRequests[0].completion(.success(homeSystemDataResponse(favorites: [], hideSuggested: false)))
+            try await waitUntil { connection.pendingRequests.count >= 2 }
+            connection.pendingRequests[1].completion(.success(.dictionary(["entities": []])))
+            try await waitUntil { client.sentSections.count == 1 }
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.root, correlationId: "second"))
+            try await waitUntil { client.sentSections.count == 2 }
+
+            #expect(connection.pendingRequests.count == 2)
+            #expect(!client.sentSections.last!.section.items.map(\.id).contains(GarminOverviewSectionID.favorites))
+        }
+    }
+
+    @Test func getFavoritesSectionRefreshesVisibleValues() async throws {
+        GarminHomeFavoritesCache.shared.clear()
+        defer {
+            GarminHomeFavoritesCache.shared.clear()
+            GarminOverviewVisibleEntityRegistry.shared.clearVisible()
+        }
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let favorite = HAAppEntity(
+                id: "server-1-light.kitchen",
+                entityId: "light.kitchen",
+                serverId: "server-1",
+                domain: "light",
+                name: "Kitchen",
+                icon: nil,
+                rawDeviceClass: nil
+            )
+            try saveAppEntities([favorite])
+            let favoriteItem = MagicItem(id: favorite.entityId, serverId: favorite.serverId, type: .entity)
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [favorite] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(
+                configProvider: { GarminConfig(selectedServerId: "server-1") },
+                statusSnapshotProvider: { _, items, cacheOnly, completion in
+                    #expect(!cacheOnly)
+                    #expect(items.map(\.id) == [favorite.entityId])
+                    completion(.success(GarminStatusSnapshot(statuses: [
+                        .init(id: GarminConfig.opaqueItemId(for: favoriteItem), label: "Kitchen", value: "on"),
+                    ])))
+                }
+            )
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.favorites, correlationId: "fav"))
+            try await waitUntil { !connection.pendingRequests.isEmpty }
+            connection.pendingRequests.first?.completion(.success(homeSystemDataResponse(favorites: ["light.kitchen"], hideSuggested: true)))
+            try await waitUntil { !client.sentValuesDeltas.isEmpty }
+
+            #expect(client.sentSections.first?.section.items.map(\.id) == [
+                GarminConfig.opaqueEntityId(serverId: favorite.serverId, entityId: favorite.entityId),
+            ])
+            #expect(client.sentValuesDeltas.first?.values == [
+                GarminOverviewValue(id: GarminConfig.opaqueItemId(for: favoriteItem), value: "on"),
+            ])
+        }
+    }
+
     @Test func getSummarySectionBuildsDetailFromRawStateSnapshotWithoutDisplayValueProvider() throws {
         defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
         let client = FakeGarminConnectIQClient()
@@ -1463,5 +1734,25 @@ struct GarminIntegrationServiceTests {
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
+    }
+
+    private func saveAppEntities(_ entities: [HAAppEntity]) throws {
+        try Current.database().write { db in
+            for entity in entities {
+                try entity.insert(db, onConflict: .replace)
+            }
+        }
+    }
+
+    private func homeSystemDataResponse(
+        favorites: [String],
+        hideSuggested: Bool
+    ) -> HAData {
+        .dictionary([
+            "value": [
+                "favorite_entities": favorites,
+                "hide_suggested_entities": hideSuggested,
+            ],
+        ])
     }
 }

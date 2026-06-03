@@ -117,6 +117,21 @@ struct GarminConfigTests {
         #expect(decoded.customSections.first?.items.map(\.item.id) == ["light.kitchen"])
     }
 
+    @Test func decodesLegacyServerOverviewConfigWithFavoritesEnabled() throws {
+        let data = Data("""
+        {
+          "serverId": "server-1",
+          "areasSectionEnabled": true,
+          "summariesSectionEnabled": true,
+          "customSections": []
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(GarminServerOverviewConfig.self, from: data)
+
+        #expect(decoded.favoritesSectionEnabled)
+    }
+
     @Test func supportsExpectedActionDomains() throws {
         #expect(GarminSupportedDomains.supportsAction(.scene))
         #expect(GarminSupportedDomains.supportsAction(.script))

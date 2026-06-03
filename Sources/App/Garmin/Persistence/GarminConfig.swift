@@ -89,6 +89,11 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
         set { updateActiveServerConfig { $0.summariesSectionEnabled = newValue } }
     }
 
+    public var favoritesSectionEnabled: Bool {
+        get { activeServerConfig.favoritesSectionEnabled }
+        set { updateActiveServerConfig { $0.favoritesSectionEnabled = newValue } }
+    }
+
     public var customSections: [GarminCustomSection] {
         get { activeServerConfig.customSections }
         set { updateActiveServerConfig { $0.customSections = newValue } }
@@ -154,17 +159,20 @@ public struct GarminConfig: Codable, FetchableRecord, PersistableRecord, Equatab
 public struct GarminServerOverviewConfig: Codable, Equatable, Identifiable {
     public var id: String { serverId }
     public var serverId: String
+    public var favoritesSectionEnabled: Bool
     public var areasSectionEnabled: Bool
     public var summariesSectionEnabled: Bool
     public var customSections: [GarminCustomSection]
 
     public init(
         serverId: String,
+        favoritesSectionEnabled: Bool = true,
         areasSectionEnabled: Bool = true,
         summariesSectionEnabled: Bool = true,
         customSections: [GarminCustomSection] = []
     ) {
         self.serverId = serverId
+        self.favoritesSectionEnabled = favoritesSectionEnabled
         self.areasSectionEnabled = areasSectionEnabled
         self.summariesSectionEnabled = summariesSectionEnabled
         self.customSections = customSections
@@ -172,6 +180,7 @@ public struct GarminServerOverviewConfig: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case serverId
+        case favoritesSectionEnabled
         case areasSectionEnabled
         case summariesSectionEnabled
         case customSections
@@ -180,6 +189,10 @@ public struct GarminServerOverviewConfig: Codable, Equatable, Identifiable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         serverId = try container.decode(String.self, forKey: .serverId)
+        favoritesSectionEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .favoritesSectionEnabled
+        ) ?? true
         areasSectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .areasSectionEnabled) ?? true
         summariesSectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .summariesSectionEnabled) ?? true
         customSections = try container.decodeIfPresent([GarminCustomSection].self, forKey: .customSections) ?? []
