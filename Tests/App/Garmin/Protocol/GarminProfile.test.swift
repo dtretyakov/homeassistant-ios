@@ -132,6 +132,9 @@ struct GarminProfileTests {
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "scene") == "sc")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "script") == "sr")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "light") == "l")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "climate") == "cl")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "fan") == "f")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "humidifier") == "hm")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "switch") == "sw")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "input_boolean") == "ib")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "cover") == "cv")
@@ -139,9 +142,11 @@ struct GarminProfileTests {
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "alarm_control_panel") == "al")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "binary_sensor") == "bs")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "sensor") == "sn")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "media_player") == "mp")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "person") == "p")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "device_tracker") == "dt")
-        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "media_player") == nil)
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "water_heater") == "wh")
+        #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "weather") == "w")
     }
 
     @Test func notModifiedMessagesUseFlatCompactKeys() throws {
@@ -371,7 +376,14 @@ struct GarminProfileTests {
         ]
         let source = GarminHomeOverviewSource(
             entityProvider: { [kitchen, hall] },
-            areaProvider: { _ in [area("kitchen", name: "Kitchen", entities: ["light.kitchen"])] }
+            areaProvider: { _ in [area("kitchen", name: "Kitchen", entities: ["light.kitchen"])] },
+            summaryProvider: summaryProvider(
+                panels: [panel("light")],
+                states: [
+                    .init(entityId: "light.kitchen", state: "on"),
+                    .init(entityId: "light.hall", state: "off"),
+                ]
+            )
         )
         let config = GarminConfig(selectedServerId: "server-1")
 
@@ -384,10 +396,9 @@ struct GarminProfileTests {
         ))
         let summaries = try #require(try source.section(id: GarminOverviewSectionID.summaries, config: config, itemInfo: { _ in nil }))
         let lights = try #require(try source.section(
-            id: GarminOverviewSectionID.summary("lights"),
+            id: GarminOverviewSectionID.summary("light"),
             config: config,
-            itemInfo: { _ in nil },
-            valueProvider: { values[$0.id] }
+            itemInfo: { _ in nil }
         ))
 
         #expect(areas.items.map(\.type) == [.section])
@@ -396,9 +407,200 @@ struct GarminProfileTests {
         #expect(areaDetail.items.map(\.domain) == ["l"])
         #expect(areaDetail.values == [.init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "on")])
         #expect(summaries.items.first?.type == .section)
+        #expect(summaries.items.first?.id == GarminOverviewSectionID.summary("light"))
         #expect(lights.items.map(\.label) == ["Kitchen"])
         #expect(lights.items.map(\.domain) == ["l"])
-        #expect(lights.values == [.init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "on")])
+        #expect(lights.values.isEmpty)
+    }
+
+    @Test func summaryProviderBuildsCanonicalListWithPanelAndRegistryFilters() throws {
+        let visibleLight = entity("light.visible", name: "Visible light", domain: "light")
+        let hiddenLight = entity("light.hidden", name: "Hidden light", domain: "light")
+        let diagnosticClimate = entity("climate.diagnostic", name: "Diagnostic climate", domain: "climate")
+        let media = entity("media_player.living_room", name: "Living room", domain: "media_player")
+        let provider = summaryProvider(
+            registries: [
+                registry(entityId: hiddenLight.entityId, hiddenBy: "user"),
+                registry(entityId: diagnosticClimate.entityId, entityCategory: "diagnostic"),
+            ],
+            panels: [panel("light"), panel("climate")],
+            states: [
+                .init(entityId: visibleLight.entityId, state: "on"),
+                .init(entityId: hiddenLight.entityId, state: "on"),
+                .init(entityId: diagnosticClimate.entityId, state: "heat"),
+                .init(entityId: media.entityId, state: "playing"),
+            ]
+        )
+
+        let summaries = try provider.summaries(
+            serverId: "server-1",
+            entities: [visibleLight, hiddenLight, diagnosticClimate, media]
+        )
+
+        #expect(summaries.map(\.id) == ["light", "media_players"])
+    }
+
+    @Test func summaryProviderRequiresLiveStatesAndDoesNotFallbackToAllEntities() throws {
+        let kitchen = entity("light.kitchen", name: "Kitchen", domain: "light")
+        let hall = entity("light.hall", name: "Hall", domain: "light")
+        let provider = summaryProvider(panels: [panel("light")])
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [kitchen, hall])
+        let contributors = try provider.contributors(serverId: "server-1", summaryId: "light", entities: [kitchen, hall])
+
+        #expect(summaries.isEmpty)
+        #expect(contributors.isEmpty)
+    }
+
+    @Test func summaryProviderUsesRawStateSnapshotForActiveContributors() throws {
+        let onLight = entity("light.kitchen", name: "Kitchen", domain: "light")
+        let offLight = entity("light.hall", name: "Hall", domain: "light")
+        let unlocked = entity("lock.front_door", name: "Front door", domain: "lock")
+        let locked = entity("lock.back_door", name: "Back door", domain: "lock")
+        let provider = summaryProvider(
+            panels: [panel("light"), panel("security")],
+            states: [
+                .init(entityId: onLight.entityId, state: "on"),
+                .init(entityId: offLight.entityId, state: "off"),
+                .init(entityId: unlocked.entityId, state: "unlocked"),
+                .init(entityId: locked.entityId, state: "locked"),
+            ]
+        )
+
+        let lights = try provider.contributors(serverId: "server-1", summaryId: "light", entities: [onLight, offLight])
+        let security = try provider.contributors(serverId: "server-1", summaryId: "security", entities: [unlocked, locked])
+
+        #expect(lights.map(\.entityId) == [onLight.entityId])
+        #expect(security.map(\.entityId) == [unlocked.entityId])
+    }
+
+    @Test func summaryProviderMatchesHomeAssistantSecurityFiltersAndImportantStates() throws {
+        let camera = entity("camera.porch", name: "Porch camera", domain: "camera")
+        let gate = entity("cover.gate", name: "Gate", domain: "cover", deviceClass: "gate")
+        let smoke = entity("binary_sensor.smoke", name: "Smoke", domain: "binary_sensor", deviceClass: "smoke")
+        let tamper = entity("binary_sensor.tamper", name: "Tamper", domain: "binary_sensor", deviceClass: "tamper")
+        let locked = entity("lock.back", name: "Back", domain: "lock")
+        let provider = summaryProvider(
+            registries: [
+                registry(entityId: tamper.entityId, entityCategory: "diagnostic"),
+            ],
+            panels: [panel("security")],
+            states: [
+                .init(entityId: camera.entityId, state: "idle"),
+                .init(entityId: gate.entityId, state: "open"),
+                .init(entityId: smoke.entityId, state: "on"),
+                .init(entityId: tamper.entityId, state: "on"),
+                .init(entityId: locked.entityId, state: "locked"),
+            ]
+        )
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [camera, gate, smoke, tamper, locked])
+        let contributors = try provider.contributors(serverId: "server-1", summaryId: "security", entities: [camera, gate, smoke, tamper, locked])
+
+        #expect(summaries.map(\.id) == ["security"])
+        #expect(contributors.map(\.entityId) == [gate.entityId, smoke.entityId, tamper.entityId])
+    }
+
+    @Test func summaryProviderUsesHomeAssistantMaintenanceThresholds() throws {
+        let low = entity("sensor.low_battery", name: "Low battery", domain: "sensor", deviceClass: "battery")
+        let ok = entity("sensor.ok_battery", name: "Ok battery", domain: "sensor", deviceClass: "battery")
+        let unavailable = entity("sensor.unavailable_battery", name: "Unavailable battery", domain: "sensor", deviceClass: "battery")
+        let unknown = entity("sensor.unknown_battery", name: "Unknown battery", domain: "sensor", deviceClass: "battery")
+        let binaryLow = entity("binary_sensor.remote_battery", name: "Remote battery", domain: "binary_sensor", deviceClass: "battery")
+        let provider = summaryProvider(
+            panels: [panel("maintenance")],
+            states: [
+                .init(entityId: low.entityId, state: "20"),
+                .init(entityId: ok.entityId, state: "21"),
+                .init(entityId: unavailable.entityId, state: "unavailable"),
+                .init(entityId: unknown.entityId, state: "unknown"),
+                .init(entityId: binaryLow.entityId, state: "on"),
+            ]
+        )
+
+        let contributors = try provider.contributors(
+            serverId: "server-1",
+            summaryId: "maintenance",
+            entities: [low, ok, unavailable, unknown, binaryLow]
+        )
+
+        #expect(contributors.map(\.entityId) == [low.entityId, unavailable.entityId, binaryLow.entityId])
+    }
+
+    @Test func summaryProviderMatchesHomeAssistantClimateFiltersWithoutShowingIdleDevices() throws {
+        let climateIdle = entity("climate.hall", name: "Hall climate", domain: "climate")
+        let fan = entity("fan.ceiling", name: "Ceiling fan", domain: "fan")
+        let humidifier = entity("humidifier.bedroom", name: "Bedroom humidifier", domain: "humidifier")
+        let windowCover = entity("cover.window", name: "Window cover", domain: "cover", deviceClass: "window")
+        let windowSensor = entity("binary_sensor.window", name: "Window", domain: "binary_sensor", deviceClass: "window")
+        let provider = summaryProvider(
+            panels: [panel("climate")],
+            states: [
+                .init(entityId: climateIdle.entityId, state: "idle"),
+                .init(entityId: fan.entityId, state: "on"),
+                .init(entityId: humidifier.entityId, state: "off"),
+                .init(entityId: windowCover.entityId, state: "open"),
+                .init(entityId: windowSensor.entityId, state: "on"),
+            ]
+        )
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [climateIdle, fan, humidifier, windowCover, windowSensor])
+        let contributors = try provider.contributors(serverId: "server-1", summaryId: "climate", entities: [climateIdle, fan, humidifier, windowCover, windowSensor])
+
+        #expect(summaries.map(\.id) == ["climate"])
+        #expect(contributors.map(\.entityId) == [fan.entityId, windowCover.entityId, windowSensor.entityId])
+    }
+
+    @Test func summaryProviderTreatsWeatherAsSingleSummaryTile() throws {
+        let zWeather = entity("weather.z_outside", name: "Z outside", domain: "weather")
+        let aWeather = entity("weather.a_outside", name: "A outside", domain: "weather")
+        let provider = summaryProvider(states: [
+            .init(entityId: zWeather.entityId, state: "sunny"),
+            .init(entityId: aWeather.entityId, state: "cloudy"),
+        ])
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [zWeather, aWeather])
+        let contributors = try provider.contributors(serverId: "server-1", summaryId: "weather", entities: [zWeather, aWeather])
+
+        #expect(summaries.map(\.id) == ["weather"])
+        #expect(contributors.map(\.entityId) == [aWeather.entityId])
+    }
+
+    @Test func summaryProviderSupportsLegacySummaryAliases() throws {
+        let provider = summaryProvider()
+
+        #expect(provider.canonicalSummaryId("lights") == "light")
+        #expect(provider.canonicalSummaryId("locks") == "security")
+        #expect(provider.canonicalSummaryId("openings") == "security")
+        #expect(provider.canonicalSummaryId("people") == nil)
+    }
+
+    @Test func summaryDetailSectionCanBuildWithoutDisplayValueProvider() throws {
+        let kitchen = entity("light.kitchen", name: "Kitchen", domain: "light")
+        let hall = entity("light.hall", name: "Hall", domain: "light")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [kitchen, hall] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(
+                panels: [panel("light")],
+                states: [
+                    .init(entityId: kitchen.entityId, state: "on"),
+                    .init(entityId: hall.entityId, state: "off"),
+                ]
+            )
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("light"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.label) == ["Kitchen"])
+        #expect(section.items.map(\.id) == [
+            GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"),
+        ])
     }
 
     @Test func maxTypicalSectionSnapshotStaysWithinGarminOutboundLimit() throws {
@@ -620,5 +822,60 @@ struct GarminProfileTests {
             sortOrder: nil,
             entities: entities
         )
+    }
+
+    private func summaryProvider(
+        registries: [AppEntityRegistry] = [],
+        panels: [AppPanel] = [],
+        states: [GarminHomeSummaryEntityState] = []
+    ) -> GarminHomeSummaryProvider {
+        GarminHomeSummaryProvider(
+            registryProvider: { _ in registries },
+            panelProvider: { _ in panels },
+            stateProvider: { _ in states }
+        )
+    }
+
+    private func panel(_ path: String) -> AppPanel {
+        AppPanel(
+            serverId: "server-1",
+            title: path,
+            path: path,
+            component: path,
+            showInSidebar: true
+        )
+    }
+
+    private func registry(
+        entityId: String,
+        hiddenBy: String? = nil,
+        disabledBy: String? = nil,
+        entityCategory: String? = nil
+    ) -> AppEntityRegistry {
+        AppEntityRegistry(serverId: "server-1", registry: EntityRegistryEntry(
+            uniqueId: "uid-\(entityId)",
+            entityId: entityId,
+            platform: nil,
+            configEntryId: nil,
+            deviceId: nil,
+            areaId: nil,
+            disabledBy: disabledBy,
+            hiddenBy: hiddenBy,
+            entityCategory: entityCategory,
+            name: nil,
+            originalName: nil,
+            icon: nil,
+            originalIcon: nil,
+            aliases: nil,
+            labels: nil,
+            deviceClass: nil,
+            originalDeviceClass: nil,
+            capabilities: nil,
+            supportedFeatures: nil,
+            unitOfMeasurement: nil,
+            options: nil,
+            translationKey: nil,
+            hasEntityName: nil
+        ))
     }
 }

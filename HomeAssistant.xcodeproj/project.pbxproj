@@ -1254,6 +1254,7 @@
 		5A01B0042F30000100C0D013 /* GarminEntityDiscoveryService.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0032F30000100C0D013 /* GarminEntityDiscoveryService.test.swift */; };
 		5A01B0062F30000200C0D014 /* GarminConfigurationViewModel.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0052F30000200C0D014 /* GarminConfigurationViewModel.test.swift */; };
 		5A01B0082F30000300C0D017 /* GarminStatusSnapshotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */; };
+		5A01B0612F30006000C0D060 /* GarminHomeSummaryProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0602F30006000C0D060 /* GarminHomeSummaryProvider.swift */; };
 		5A01B00A2F30000400C0D017 /* Persistence/GarminStatusSnapshotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0092F30000400C0D017 /* Persistence/GarminStatusSnapshotCache.swift */; };
 		5A01B00C2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B00B2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift */; };
 		5A01B00E2F30000600C0D017 /* GarminStatusSnapshotService.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B00D2F30000600C0D017 /* GarminStatusSnapshotService.test.swift */; };
@@ -3127,6 +3128,7 @@
 		5A01B0032F30000100C0D013 /* GarminEntityDiscoveryService.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminEntityDiscoveryService.test.swift; sourceTree = "<group>"; };
 		5A01B0052F30000200C0D014 /* GarminConfigurationViewModel.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminConfigurationViewModel.test.swift; sourceTree = "<group>"; };
 		5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminStatusSnapshotService.swift; sourceTree = "<group>"; };
+		5A01B0602F30006000C0D060 /* GarminHomeSummaryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminHomeSummaryProvider.swift; sourceTree = "<group>"; };
 		5A01B0092F30000400C0D017 /* Persistence/GarminStatusSnapshotCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminStatusSnapshotCache.swift; sourceTree = "<group>"; };
 		5A01B00B2F30000500C0D017 /* Persistence/GarminStatusSnapshotCacheTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminStatusSnapshotCacheTable.swift; sourceTree = "<group>"; };
 		5A01B00D2F30000600C0D017 /* GarminStatusSnapshotService.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminStatusSnapshotService.test.swift; sourceTree = "<group>"; };
@@ -6694,6 +6696,7 @@
 				5A01B03F2F30004000C0D040 /* GarminIntegrationController.swift */,
 				11F4BAD806620639E2C09698 /* GarminIntegrationService.swift */,
 				5A01B0012F30000100C0D013 /* GarminEntityDiscoveryService.swift */,
+				5A01B0602F30006000C0D060 /* GarminHomeSummaryProvider.swift */,
 				5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */,
 				5A01B0112F30000800C0D017 /* GarminStatusObservationService.swift */,
 				5A01B0152F30000A00C0D019 /* GarminDiagnostics.swift */,
@@ -9708,6 +9711,7 @@
 				5A01B0402F30004000C0D040 /* GarminIntegrationController.swift in Sources */,
 				16B123FA47FBC684C9136FE2 /* GarminIntegrationService.swift in Sources */,
 				5A01B0022F30000100C0D013 /* GarminEntityDiscoveryService.swift in Sources */,
+				5A01B0612F30006000C0D060 /* GarminHomeSummaryProvider.swift in Sources */,
 				5A01B0082F30000300C0D017 /* GarminStatusSnapshotService.swift in Sources */,
 				5A01B0122F30000800C0D017 /* GarminStatusObservationService.swift in Sources */,
 				5A01B0162F30000A00C0D019 /* GarminDiagnostics.swift in Sources */,

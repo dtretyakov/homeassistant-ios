@@ -304,13 +304,16 @@ final class GarminHomeOverviewSource {
 
     private let entityProvider: EntityProvider
     private let areaProvider: AreaProvider
+    private let summaryProvider: GarminHomeSummaryProviding
 
     init(
         entityProvider: @escaping EntityProvider = { try HAAppEntity.config() },
-        areaProvider: @escaping AreaProvider = { serverId in try AppArea.fetchAreas(for: serverId) }
+        areaProvider: @escaping AreaProvider = { serverId in try AppArea.fetchAreas(for: serverId) },
+        summaryProvider: GarminHomeSummaryProviding = GarminHomeSummaryProvider()
     ) {
         self.entityProvider = entityProvider
         self.areaProvider = areaProvider
+        self.summaryProvider = summaryProvider
     }
 
     func section(
@@ -335,7 +338,9 @@ final class GarminHomeOverviewSource {
         } else if id == GarminOverviewSectionID.summaries || id == "summaries" {
             return try summariesSection(serverId: serverId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if id.hasPrefix("summary:") {
-            let summaryId = String(id.dropFirst("summary:".count))
+            guard let summaryId = summaryProvider.canonicalSummaryId(String(id.dropFirst("summary:".count))) else {
+                return nil
+            }
             return try summaryDetailSection(serverId: serverId, summaryId: summaryId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if let custom = config.customSections.first(where: { GarminOverviewSectionID.custom($0.id) == id || "custom:\($0.id)" == id }) {
             return customSection(id: custom.id, serverId: serverId, config: config, itemInfo: itemInfo, valueProvider: valueProvider, offset: offset, limit: limit)
@@ -364,10 +369,15 @@ final class GarminHomeOverviewSource {
                 .sorted(by: sortEntity)
                 .map(magicItem), offset: offset, limit: limit)
         } else if id.hasPrefix("summary:") {
-            let summaryId = String(id.dropFirst("summary:".count))
-            return pageSlice(try entityProvider()
-                .filter { $0.serverId == serverId && summaryMatches(entity: $0, summaryId: summaryId) && GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
-                .sorted(by: sortEntity)
+            guard let summaryId = summaryProvider.canonicalSummaryId(String(id.dropFirst("summary:".count))) else {
+                return []
+            }
+            return pageSlice(try summaryProvider.contributors(
+                serverId: serverId,
+                summaryId: summaryId,
+                entities: entityProvider()
+            )
+                .filter { GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
                 .map(magicItem), offset: offset, limit: limit)
         } else if let custom = config.customSections.first(where: { GarminOverviewSectionID.custom($0.id) == id || "custom:\($0.id)" == id }) {
             return pageSlice(custom.items
@@ -434,7 +444,7 @@ final class GarminHomeOverviewSource {
 
     private func summariesSection(serverId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection {
         let entities = try entityProvider().filter { $0.serverId == serverId }
-        let definitions = summaryDefinitions(entities: entities)
+        let definitions = try summaryProvider.summaries(serverId: serverId, entities: entities)
         let items = definitions.map { definition in
             GarminOverviewItem(
                 id: "summary:\(definition.id)",
@@ -447,9 +457,11 @@ final class GarminHomeOverviewSource {
     }
 
     private func summaryDetailSection(serverId: String, summaryId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection {
-        let entities = try entityProvider().filter { $0.serverId == serverId }
-        let items = summaryContributors(entities: entities, summaryId: summaryId, valueProvider: valueProvider)
-            .sorted(by: sortEntity)
+        let items = try summaryProvider.contributors(
+            serverId: serverId,
+            summaryId: summaryId,
+            entities: entityProvider()
+        )
             .map(statusItem)
         let title = summaryTitle(summaryId)
         return overviewSection(id: GarminOverviewSectionID.summary(summaryId), title: title, items: items, valueProvider: valueProvider, offset: offset, limit: limit)
@@ -636,71 +648,15 @@ final class GarminHomeOverviewSource {
         lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
 
-    private func summaryDefinitions(entities: [HAAppEntity]) -> [(id: String, title: String, iconName: String)] {
-        var definitions: [(String, String, String)] = []
-        if entities.contains(where: { $0.domain == "light" }) { definitions.append(("lights", "Lights", "mdi:lightbulb")) }
-        if entities.contains(where: { $0.domain == "cover" }) { definitions.append(("covers", "Covers", "mdi:window-shutter")) }
-        if entities.contains(where: { $0.domain == "lock" }) { definitions.append(("locks", "Locks", "mdi:lock")) }
-        if entities.contains(where: { $0.domain == "binary_sensor" && ($0.rawDeviceClass == "door" || $0.rawDeviceClass == "window") }) {
-            definitions.append(("openings", "Doors & windows", "mdi:door-open"))
-        }
-        if entities.contains(where: { $0.domain == "person" || $0.domain == "device_tracker" }) { definitions.append(("people", "People", "mdi:account")) }
-        return definitions
-    }
-
-    private func summaryMatches(entity: HAAppEntity, summaryId: String) -> Bool {
-        switch summaryId {
-        case "lights": return entity.domain == "light"
-        case "covers": return entity.domain == "cover"
-        case "locks": return entity.domain == "lock"
-        case "openings": return entity.domain == "binary_sensor" && (entity.rawDeviceClass == "door" || entity.rawDeviceClass == "window")
-        case "people": return entity.domain == "person" || entity.domain == "device_tracker"
-        default: return false
-        }
-    }
-
-    private func summaryContributors(
-        entities: [HAAppEntity],
-        summaryId: String,
-        valueProvider: ValueProvider
-    ) -> [HAAppEntity] {
-        entities.filter { entity in
-            guard summaryMatches(entity: entity, summaryId: summaryId) else { return false }
-            let item = statusItem(entity)
-            guard let value = valueProvider(item)?.lowercased(), !value.isEmpty else { return false }
-            switch summaryId {
-            case "lights":
-                return value == "on"
-            case "covers", "openings":
-                return value == "open" || value == "opening" || value == "on"
-            case "locks":
-                return value == "unlocked" || value == "unlocking" || value == "jammed" || value == "on"
-            case "people":
-                return value == "home"
-            default:
-                return false
-            }
-        }
-    }
-
-    private func summaryValue(summaryId: String, count: Int) -> String {
-        switch summaryId {
-        case "lights": return "\(count) on"
-        case "covers": return "\(count) open"
-        case "locks": return "\(count) unlocked"
-        case "openings": return "\(count) open"
-        case "people": return "\(count) home"
-        default: return "\(count)"
-        }
-    }
-
     private func summaryTitle(_ summaryId: String) -> String {
         switch summaryId {
-        case "lights": return "Lights"
-        case "covers": return "Covers"
-        case "locks": return "Locks"
-        case "openings": return "Doors & windows"
-        case "people": return "People"
+        case "light": return "Lights"
+        case "climate": return "Climate"
+        case "security": return "Security"
+        case "media_players": return "Media players"
+        case "maintenance": return "Maintenance"
+        case "weather": return "Weather"
+        case "energy": return "Energy"
         default: return "Summary"
         }
     }

@@ -287,13 +287,19 @@ public enum GarminSupportedDomains {
         Domain.binarySensor.rawValue,
         Domain.sensor.rawValue,
         "alarm_control_panel",
+        Domain.climate.rawValue,
+        "fan",
+        "humidifier",
         Domain.light.rawValue,
+        "media_player",
         Domain.switch.rawValue,
         Domain.inputBoolean.rawValue,
         Domain.lock.rawValue,
         Domain.cover.rawValue,
         Domain.person.rawValue,
         "device_tracker",
+        "water_heater",
+        "weather",
     ]
 
     public static var overviewDomainRawValues: [String] {
@@ -359,14 +365,26 @@ public enum GarminSupportedDomains {
             return "lk"
         case "alarm_control_panel":
             return "al"
+        case Domain.climate.rawValue:
+            return "cl"
+        case "fan":
+            return "f"
+        case "humidifier":
+            return "hm"
         case Domain.binarySensor.rawValue:
             return "bs"
         case Domain.sensor.rawValue:
             return "sn"
+        case "media_player":
+            return "mp"
         case Domain.person.rawValue:
             return "p"
         case "device_tracker":
             return "dt"
+        case "water_heater":
+            return "wh"
+        case "weather":
+            return "w"
         default:
             return nil
         }

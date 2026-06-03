@@ -195,6 +195,32 @@ final class GarminIntegrationService {
         let pageOffset = message.pageOffset
         let pageLimit = GarminOverviewSection.sanitizedLimit(message.pageLimit ?? GarminConfig.maxSectionItems)
 
+        prefetchSummaryStatesIfNeeded(sectionId: sectionId, config: config) { [weak self] in
+            self?.sendSectionResponse(
+                message: message,
+                config: config,
+                sectionId: sectionId,
+                overviewSource: overviewSource,
+                itemInfo: itemInfo,
+                pageOffset: pageOffset,
+                pageLimit: pageLimit,
+                requestStartedAt: requestStartedAt,
+                completion: completion
+            )
+        }
+    }
+
+    private func sendSectionResponse(
+        message: GarminInboundMessage,
+        config: GarminConfig,
+        sectionId: String,
+        overviewSource: GarminHomeOverviewSource,
+        itemInfo: @escaping (MagicItem) -> MagicItem.Info?,
+        pageOffset: Int,
+        pageLimit: Int,
+        requestStartedAt: Date,
+        completion: @escaping (GarminCommandResult) -> Void
+    ) {
         do {
             let sectionBuildStartedAt = Date()
             guard let section = try pageSizedSection(
@@ -274,6 +300,43 @@ final class GarminIntegrationService {
         } catch {
             send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: .homeAssistantUnavailable), completion: completion)
         }
+    }
+
+    private func prefetchSummaryStatesIfNeeded(
+        sectionId: String,
+        config: GarminConfig,
+        completion: @escaping () -> Void
+    ) {
+        guard sectionId == GarminOverviewSectionID.summaries || sectionId == "summaries" || sectionId.hasPrefix("summary:") else {
+            completion()
+            return
+        }
+        guard let serverId = config.selectedServerId ?? config.customItems.first?.serverId else {
+            completion()
+            return
+        }
+        guard let server = Current.servers.server(forServerIdentifier: serverId),
+              let connection = Current.api(for: server)?.connection else {
+            GarminHomeSummaryStateCache.shared.clear(serverId: serverId)
+            completion()
+            return
+        }
+
+        let gate = GarminOneShotCompletion(completion)
+        delayedWorkScheduler(1.0) {
+            gate.complete()
+        }
+
+        connection.caches.states().once().promise
+            .map { states in states.all.map(GarminHomeSummaryEntityState.init(entity:)) }
+            .done { states in
+                GarminHomeSummaryStateCache.shared.setStates(states, serverId: serverId)
+                gate.complete()
+            }
+            .catch { _ in
+                GarminHomeSummaryStateCache.shared.clear(serverId: serverId)
+                gate.complete()
+            }
     }
 
     private func pageSizedSection(
@@ -974,6 +1037,27 @@ private extension GarminDiagnostics {
             "command_state": commandState?.rawValue ?? "",
             "error_code": error?.rawValue ?? "",
         ])
+    }
+}
+
+private final class GarminOneShotCompletion {
+    private let lock = NSLock()
+    private let completion: () -> Void
+    private var didComplete = false
+
+    init(_ completion: @escaping () -> Void) {
+        self.completion = completion
+    }
+
+    func complete() {
+        lock.lock()
+        guard !didComplete else {
+            lock.unlock()
+            return
+        }
+        didComplete = true
+        lock.unlock()
+        completion()
     }
 }
 

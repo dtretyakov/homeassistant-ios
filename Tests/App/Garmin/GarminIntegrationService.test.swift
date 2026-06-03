@@ -918,6 +918,86 @@ struct GarminIntegrationServiceTests {
         ])
     }
 
+    @Test func getSummarySectionBuildsDetailFromRawStateSnapshotWithoutDisplayValueProvider() throws {
+        defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        let client = FakeGarminConnectIQClient()
+        let kitchen = HAAppEntity(
+            id: "server-1-light.kitchen",
+            entityId: "light.kitchen",
+            serverId: "server-1",
+            domain: "light",
+            name: "Kitchen",
+            icon: nil,
+            rawDeviceClass: nil
+        )
+        let hall = HAAppEntity(
+            id: "server-1-light.hall",
+            entityId: "light.hall",
+            serverId: "server-1",
+            domain: "light",
+            name: "Hall",
+            icon: nil,
+            rawDeviceClass: nil
+        )
+        let provider = GarminHomeSummaryProvider(
+            registryProvider: { _ in [] },
+            panelProvider: { _ in [
+                AppPanel(
+                    serverId: "server-1",
+                    title: "Light",
+                    path: "light",
+                    component: "light",
+                    showInSidebar: true
+                ),
+            ] },
+            stateProvider: { _ in [
+                .init(entityId: kitchen.entityId, state: "on"),
+                .init(entityId: hall.entityId, state: "off"),
+            ] }
+        )
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [kitchen, hall] },
+            areaProvider: { _ in [] },
+            summaryProvider: provider
+        )
+        let service = GarminIntegrationService(
+            client: client,
+            overviewSourceProvider: { source }
+        )
+        service.setup(
+            configProvider: { GarminConfig(selectedServerId: "server-1") },
+            statusSnapshotProvider: { _, items, cacheOnly, completion in
+                #expect(items.map(\.id) == [kitchen.entityId])
+                guard !cacheOnly else {
+                    completion(.failure(.homeAssistantUnavailable))
+                    return
+                }
+                completion(.success(GarminStatusSnapshot(statuses: [
+                    .init(
+                        id: GarminConfig.opaqueEntityId(serverId: kitchen.serverId, entityId: kitchen.entityId),
+                        label: kitchen.name,
+                        value: "on"
+                    ),
+                ])))
+            }
+        )
+
+        service.handle(GarminInboundMessage(
+            type: .getSection,
+            id: GarminOverviewSectionID.summary("light"),
+            correlationId: "s-light"
+        ))
+
+        #expect(client.sentSections.last?.section.items.map(\.label) == ["Kitchen"])
+        #expect(client.sentSections.last?.section.values.isEmpty == true)
+        #expect(client.sentValuesDeltas.last?.values == [
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: kitchen.serverId, entityId: kitchen.entityId),
+                value: "on"
+            ),
+        ])
+    }
+
     @Test func nonActionCapableItemFailsAsMissingActionWithoutExecuting() throws {
         let client = FakeGarminConnectIQClient()
         var didExecute = false
