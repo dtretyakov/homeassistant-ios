@@ -71,6 +71,8 @@ public extension HAEntity {
                 image = .lightbulbIcon
             case .lock:
                 image = getLockIcon()
+            case .mediaPlayer:
+                image = .playCircleIcon
             case .scene:
                 image = .paletteOutlineIcon
             case .script:

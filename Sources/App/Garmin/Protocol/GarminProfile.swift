@@ -302,22 +302,26 @@ final class GarminHomeOverviewSource {
     typealias EntityProvider = () throws -> [HAAppEntity]
     typealias AreaProvider = (String) throws -> [AppArea]
     typealias ValueProvider = (GarminOverviewItem) -> String?
+    typealias StateProvider = (String) -> [GarminHomeSummaryEntityState]
 
     private let entityProvider: EntityProvider
     private let areaProvider: AreaProvider
     private let favoritesProvider: GarminHomeFavoritesProviding
     private let summaryProvider: GarminHomeSummaryProviding
+    private let stateProvider: StateProvider
 
     init(
         entityProvider: @escaping EntityProvider = { try HAAppEntity.config() },
         areaProvider: @escaping AreaProvider = { serverId in try AppArea.fetchAreas(for: serverId) },
         favoritesProvider: GarminHomeFavoritesProviding = GarminHomeFavoritesProvider(),
-        summaryProvider: GarminHomeSummaryProviding = GarminHomeSummaryProvider()
+        summaryProvider: GarminHomeSummaryProviding = GarminHomeSummaryProvider(),
+        stateProvider: @escaping StateProvider = { GarminHomeSummaryStateCache.shared.states(serverId: $0) }
     ) {
         self.entityProvider = entityProvider
         self.areaProvider = areaProvider
         self.favoritesProvider = favoritesProvider
         self.summaryProvider = summaryProvider
+        self.stateProvider = stateProvider
     }
 
     func section(
@@ -344,7 +348,8 @@ final class GarminHomeOverviewSource {
         } else if id == GarminOverviewSectionID.summaries || id == "summaries" {
             return try summariesSection(serverId: serverId, valueProvider: valueProvider, offset: offset, limit: limit)
         } else if id.hasPrefix("summary:") {
-            guard let summaryId = summaryProvider.canonicalSummaryId(String(id.dropFirst("summary:".count))) else {
+            let summaryId = String(id.dropFirst("summary:".count))
+            guard summaryProvider.isSupportedSummaryId(summaryId) else {
                 return nil
             }
             return try summaryDetailSection(serverId: serverId, summaryId: summaryId, valueProvider: valueProvider, offset: offset, limit: limit)
@@ -379,16 +384,13 @@ final class GarminHomeOverviewSource {
                 .sorted(by: sortEntity)
                 .map(magicItem), offset: offset, limit: limit)
         } else if id.hasPrefix("summary:") {
-            guard let summaryId = summaryProvider.canonicalSummaryId(String(id.dropFirst("summary:".count))) else {
+            let summaryId = String(id.dropFirst("summary:".count))
+            guard summaryProvider.isSupportedSummaryId(summaryId) else {
                 return []
             }
-            return pageSlice(try summaryProvider.contributors(
-                serverId: serverId,
-                summaryId: summaryId,
-                entities: entityProvider()
-            )
-                .filter { GarminSupportedDomains.supportsStatus(rawDomain: $0.domain) }
-                .map(magicItem), offset: offset, limit: limit)
+            _ = offset
+            _ = limit
+            return []
         } else if let custom = config.customSections.first(where: { GarminOverviewSectionID.custom($0.id) == id || "custom:\($0.id)" == id }) {
             return pageSlice(custom.items
                 .map(\.item)
@@ -482,6 +484,7 @@ final class GarminHomeOverviewSource {
     private func summariesSection(serverId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection {
         let entities = try entityProvider().filter { $0.serverId == serverId }
         let definitions = try summaryProvider.summaries(serverId: serverId, entities: entities)
+        let valuesById = Dictionary(uniqueKeysWithValues: definitions.map { ("summary:\($0.id)", $0.value) })
         let items = definitions.map { definition in
             GarminOverviewItem(
                 id: "summary:\(definition.id)",
@@ -490,18 +493,42 @@ final class GarminHomeOverviewSource {
             )
         }
         _ = valueProvider
-        return overviewSection(id: GarminOverviewSectionID.summaries, title: "Summaries", items: items, offset: offset, limit: limit)
+        return overviewSection(
+            id: GarminOverviewSectionID.summaries,
+            title: "Summaries",
+            items: items,
+            valueProvider: { valuesById[$0.id] },
+            allowSectionValues: true,
+            includeValuesInEtag: true,
+            offset: offset,
+            limit: limit
+        )
     }
 
     private func summaryDetailSection(serverId: String, summaryId: String, valueProvider: ValueProvider, offset: Int, limit: Int) throws -> GarminOverviewSection {
-        let items = try summaryProvider.contributors(
+        let detailItems = try summaryProvider.detailItems(
             serverId: serverId,
             summaryId: summaryId,
             entities: entityProvider()
         )
-            .map(statusItem)
+        detailItems.compactMap(\.valueItem).forEach {
+            register(item: $0, capability: GarminConfig.capability(for: $0))
+        }
+        let valuesById = Dictionary(uniqueKeysWithValues: detailItems.compactMap { detailItem -> (String, String)? in
+            guard let value = detailItem.value else { return nil }
+            return (detailItem.item.id, value)
+        })
         let title = summaryTitle(summaryId)
-        return overviewSection(id: GarminOverviewSectionID.summary(summaryId), title: title, items: items, valueProvider: valueProvider, offset: offset, limit: limit)
+        _ = valueProvider
+        return overviewSection(
+            id: GarminOverviewSectionID.summary(summaryId),
+            title: title,
+            items: detailItems.map(\.item),
+            valueProvider: { valuesById[$0.id] },
+            includeValuesInEtag: true,
+            offset: offset,
+            limit: limit
+        )
     }
 
     private func customSection(
@@ -516,7 +543,7 @@ final class GarminHomeOverviewSource {
         guard let section = config.customSections.first(where: { $0.id == id }) else { return nil }
         let items = section.items.compactMap { customItem -> GarminOverviewItem? in
             guard customItem.item.serverId == serverId else { return nil }
-            guard GarminConfig.capability(for: customItem.item) > 0 else { return nil }
+            guard capability(for: customItem.item) > 0 else { return nil }
             return item(customItem.item, itemInfo: itemInfo)
         }
         return overviewSection(id: GarminOverviewSectionID.custom(section.id), title: section.title, items: items, valueProvider: valueProvider, offset: offset, limit: limit)
@@ -527,15 +554,24 @@ final class GarminHomeOverviewSource {
         title: String,
         items: [GarminOverviewItem],
         valueProvider: ValueProvider = { _ in nil },
+        allowSectionValues: Bool = false,
+        includeValuesInEtag: Bool = false,
         offset: Int = 0,
         limit: Int = GarminConfig.maxSectionItems
     ) -> GarminOverviewSection {
         let page = pagedItems(items, offset: offset, limit: limit)
         let values = page.items.compactMap { item -> GarminOverviewValue? in
-            guard (item.cap ?? 0) & GarminConfig.valueCapability != 0 else { return nil }
+            if item.type == .section, !allowSectionValues {
+                return nil
+            }
+            if item.type == .item, (item.cap ?? 0) & GarminConfig.valueCapability == 0 {
+                return nil
+            }
             guard let value = valueProvider(item) else { return nil }
+            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return GarminOverviewValue(id: item.id, value: value)
         }
+        let valueEtagParts = includeValuesInEtag ? values.map { "v:\($0.id)|\($0.value)" } : []
         return GarminOverviewSection(
             id: id,
             title: title,
@@ -545,7 +581,7 @@ final class GarminHomeOverviewSource {
                 "l:\(page.limit)",
                 "po:\(page.previousOffset.map(String.init) ?? "")",
                 "no:\(page.nextOffset.map(String.init) ?? "")",
-            ] + page.items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|\($0.domain ?? "")" }),
+            ] + page.items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|\($0.domain ?? "")" } + valueEtagParts),
             items: page.items,
             values: values,
             pageOffset: page.offset,
@@ -601,12 +637,13 @@ final class GarminHomeOverviewSource {
 
     private func statusItem(_ entity: HAAppEntity) -> GarminOverviewItem {
         let item = magicItem(entity)
-        register(item: item, capability: GarminConfig.capability(for: item))
+        let capability = capability(for: item)
+        register(item: item, capability: capability)
         return GarminOverviewItem(
             id: GarminConfig.opaqueEntityId(serverId: entity.serverId, entityId: entity.entityId),
             label: entity.name,
             type: .item,
-            cap: GarminConfig.capability(for: item),
+            cap: capability,
             confirmation: confirmation(for: item),
             domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain)
         )
@@ -618,7 +655,7 @@ final class GarminHomeOverviewSource {
 
     private func item(_ item: MagicItem, itemInfo: (MagicItem) -> MagicItem.Info?) -> GarminOverviewItem {
         let info = itemInfo(item)
-        let capability = GarminConfig.capability(for: item)
+        let capability = capability(for: item)
         register(item: item, capability: capability)
         return GarminOverviewItem(
             id: GarminConfig.opaqueItemId(for: item),
@@ -632,7 +669,7 @@ final class GarminHomeOverviewSource {
 
     private func actionItem(_ entity: HAAppEntity) -> GarminOverviewItem {
         let item = magicItem(entity)
-        let capability = GarminConfig.capability(for: item)
+        let capability = capability(for: item)
         register(item: item, capability: capability)
         return GarminOverviewItem(
             id: GarminConfig.opaqueItemId(for: item),
@@ -655,6 +692,25 @@ final class GarminHomeOverviewSource {
         if capability & GarminConfig.actionCapability != 0 {
             GarminOverviewActionRegistry.shared.register(item: item)
         }
+    }
+
+    private func capability(for item: MagicItem) -> Int {
+        var capability = GarminConfig.capability(for: item)
+        guard capability & GarminConfig.actionCapability != 0,
+              item.type == .entity,
+              item.domain == .mediaPlayer else {
+            return capability
+        }
+        guard let state = stateProvider(item.serverId).first(where: { $0.entityId == item.id }),
+              GarminDesiredStateActionResolver.actionId(
+                  rawDomain: Domain.mediaPlayer.rawValue,
+                  state: state.state,
+                  attributes: state.attributes
+              ) != nil else {
+            capability &= ~GarminConfig.actionCapability
+            return capability
+        }
+        return capability
     }
 
     private func confirmation(for item: MagicItem) -> GarminOverviewActionConfirmation? {
@@ -693,7 +749,7 @@ final class GarminHomeOverviewSource {
         case "media_players": return "Media players"
         case "maintenance": return "Maintenance"
         case "weather": return "Weather"
-        case "energy": return "Energy"
+        case "persons": return "Persons"
         default: return "Summary"
         }
     }

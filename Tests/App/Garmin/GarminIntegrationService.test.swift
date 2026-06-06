@@ -740,7 +740,7 @@ struct GarminIntegrationServiceTests {
     @Test func missingActionFailsWithoutExecuting() throws {
         let client = FakeGarminConnectIQClient()
         var didExecute = false
-        let service = GarminIntegrationService(client: client) { _, _, completion in
+        let service = GarminIntegrationService(client: client) { _, _, _, completion in
             didExecute = true
             completion(.success(()))
         }
@@ -925,6 +925,8 @@ struct GarminIntegrationServiceTests {
             let client = FakeGarminConnectIQClient()
             let api = HomeAssistantAPI(server: server)
             let connection = HAMockConnection()
+            connection.automaticallyTransitionToConnecting = false
+            connection.callbackQueue = DispatchQueue(label: "GarminSummarySnapshotTest")
             api.connection = connection
             Current.setCachedApi(api, for: server.identifier)
 
@@ -968,6 +970,8 @@ struct GarminIntegrationServiceTests {
             let client = FakeGarminConnectIQClient()
             let api = HomeAssistantAPI(server: server)
             let connection = HAMockConnection()
+            connection.automaticallyTransitionToConnecting = false
+            connection.callbackQueue = DispatchQueue(label: "GarminSummaryConcurrentSnapshotTest")
             api.connection = connection
             Current.setCachedApi(api, for: server.identifier)
 
@@ -1191,6 +1195,9 @@ struct GarminIntegrationServiceTests {
 
     @Test func getSummarySectionBuildsDetailFromRawStateSnapshotWithoutDisplayValueProvider() throws {
         defer { GarminOverviewVisibleEntityRegistry.shared.clearVisible() }
+        GarminHomeSummaryStateCache.shared.clear()
+        defer { GarminHomeSummaryStateCache.shared.clear() }
+
         let client = FakeGarminConnectIQClient()
         let kitchen = HAAppEntity(
             id: "server-1-light.kitchen",
@@ -1210,17 +1217,12 @@ struct GarminIntegrationServiceTests {
             icon: nil,
             rawDeviceClass: nil
         )
+        GarminHomeSummaryStateCache.shared.setStates([
+            .init(entityId: kitchen.entityId, state: "on"),
+            .init(entityId: hall.entityId, state: "off"),
+        ], serverId: "server-1")
         let provider = GarminHomeSummaryProvider(
             registryProvider: { _ in [] },
-            panelProvider: { _ in [
-                AppPanel(
-                    serverId: "server-1",
-                    title: "Light",
-                    path: "light",
-                    component: "light",
-                    showInSidebar: true
-                ),
-            ] },
             stateProvider: { _ in [
                 .init(entityId: kitchen.entityId, state: "on"),
                 .init(entityId: hall.entityId, state: "off"),
@@ -1238,18 +1240,8 @@ struct GarminIntegrationServiceTests {
         service.setup(
             configProvider: { GarminConfig(selectedServerId: "server-1") },
             statusSnapshotProvider: { _, items, cacheOnly, completion in
-                #expect(items.map(\.id) == [kitchen.entityId])
-                guard !cacheOnly else {
-                    completion(.failure(.homeAssistantUnavailable))
-                    return
-                }
-                completion(.success(GarminStatusSnapshot(statuses: [
-                    .init(
-                        id: GarminConfig.opaqueEntityId(serverId: kitchen.serverId, entityId: kitchen.entityId),
-                        label: kitchen.name,
-                        value: "on"
-                    ),
-                ])))
+                Issue.record("Summary details should use prefetched raw state values instead of per-entity status refresh for \(items), cacheOnly: \(cacheOnly)")
+                completion(.failure(.homeAssistantUnavailable))
             }
         )
 
@@ -1259,14 +1251,183 @@ struct GarminIntegrationServiceTests {
             correlationId: "s-light"
         ))
 
-        #expect(client.sentSections.last?.section.items.map(\.label) == ["Kitchen"])
-        #expect(client.sentSections.last?.section.values.isEmpty == true)
-        #expect(client.sentValuesDeltas.last?.values == [
+        #expect(client.sentSections.last?.section.items.map(\.label) == ["Kitchen", "Hall"])
+        #expect(client.sentSections.last?.section.values == [
             GarminOverviewValue(
                 id: GarminConfig.opaqueEntityId(serverId: kitchen.serverId, entityId: kitchen.entityId),
-                value: "on"
+                value: "On"
+            ),
+            GarminOverviewValue(
+                id: GarminConfig.opaqueEntityId(serverId: hall.serverId, entityId: hall.entityId),
+                value: "Off"
             ),
         ])
+        #expect(client.sentValuesDeltas.isEmpty)
+    }
+
+    @Test func getSummariesWaitsForRawStateSnapshotBeforeBuildingSection() async throws {
+        GarminHomeSummaryStateCache.shared.clear()
+        defer { GarminHomeSummaryStateCache.shared.clear() }
+
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            connection.automaticallyTransitionToConnecting = false
+            connection.callbackQueue = DispatchQueue(label: "GarminSummarySnapshotTest")
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(
+                type: .getSection,
+                id: GarminOverviewSectionID.summaries,
+                correlationId: "summaries"
+            ))
+
+            try await waitUntil { !connection.pendingSubscriptions.isEmpty }
+            #expect(client.sentSections.isEmpty)
+            #expect(connection.pendingRequests.isEmpty)
+
+            for subscription in connection.pendingSubscriptions {
+                subscription.handler(subscription.cancellable, compressedStatesData([
+                    "light.kitchen": ("on", ["friendly_name": "Kitchen"]),
+                    "media_player.living_room": ("idle", ["friendly_name": "Living room"]),
+                ]))
+            }
+
+            try await waitUntil { client.sentSections.count == 1 }
+            #expect(client.sentSections.first?.section.items.map(\.id) == [
+                GarminOverviewSectionID.summary("light"),
+                GarminOverviewSectionID.summary("media_players"),
+            ])
+            #expect(client.sentSections.first?.section.values == [
+                .init(id: GarminOverviewSectionID.summary("light"), value: "1 on"),
+                .init(id: GarminOverviewSectionID.summary("media_players"), value: "No media playing"),
+            ])
+        }
+    }
+
+    @Test func concurrentSummaryRequestsShareOneRawStateSnapshotFetch() async throws {
+        GarminHomeSummaryStateCache.shared.clear()
+        defer { GarminHomeSummaryStateCache.shared.clear() }
+
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            connection.automaticallyTransitionToConnecting = false
+            connection.callbackQueue = DispatchQueue(label: "GarminSummaryConcurrentSnapshotTest")
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, _ in }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.summaries, correlationId: "sum"))
+            service.handle(GarminInboundMessage(type: .getSection, id: GarminOverviewSectionID.summary("light"), correlationId: "light"))
+
+            try await waitUntil { !connection.pendingSubscriptions.isEmpty }
+            #expect(client.sentSections.isEmpty)
+            #expect(connection.pendingRequests.isEmpty)
+
+            for subscription in connection.pendingSubscriptions {
+                subscription.handler(subscription.cancellable, compressedStatesData([
+                    "light.kitchen": ("on", ["friendly_name": "Kitchen"]),
+                ]))
+            }
+
+            try await waitUntil { client.sentSections.count == 2 }
+            #expect(connection.pendingRequests.isEmpty)
+            #expect(client.sentSections.map(\.section.id).sorted() == [
+                GarminOverviewSectionID.summaries,
+                GarminOverviewSectionID.summary("light"),
+            ].sorted())
+        }
+    }
+
+    @Test func summaryStateCacheCoalescesConcurrentFetchCompletions() {
+        let cache = GarminHomeSummaryStateCache()
+        defer { cache.clear() }
+
+        var completions: [String] = []
+        let firstStarted = cache.beginFetch(serverId: "server-1") { success in
+            #expect(success == true)
+            completions.append("first")
+        }
+        let secondStarted = cache.beginFetch(serverId: "server-1") { success in
+            #expect(success == true)
+            completions.append("second")
+        }
+
+        #expect(firstStarted == true)
+        #expect(secondStarted == false)
+        #expect(completions.isEmpty)
+
+        cache.completeFetch(serverId: "server-1")
+
+        #expect(completions == ["first", "second"])
+    }
+
+    @Test func summaryStatePrefetchTimeoutFailsInsteadOfSendingEmptySection() async throws {
+        GarminHomeSummaryStateCache.shared.clear()
+        defer { GarminHomeSummaryStateCache.shared.clear() }
+
+        try await withServerAsync(identifier: "server-1") { server in
+            let client = FakeGarminConnectIQClient()
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            connection.automaticallyTransitionToConnecting = false
+            connection.callbackQueue = DispatchQueue(label: "GarminSummaryTimeoutTest")
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            var timeoutWork: (() -> Void)?
+            let source = GarminHomeOverviewSource(
+                entityProvider: { [] },
+                areaProvider: { _ in [] }
+            )
+            let service = GarminIntegrationService(
+                client: client,
+                overviewSourceProvider: { source },
+                delayedWorkScheduler: { _, work in timeoutWork = work }
+            )
+            service.setup(configProvider: { GarminConfig(selectedServerId: "server-1") })
+
+            service.handle(GarminInboundMessage(
+                type: .getSection,
+                id: GarminOverviewSectionID.summaries,
+                correlationId: "summaries-timeout"
+            ))
+
+            try await waitUntil { timeoutWork != nil }
+            #expect(client.sentSections.isEmpty)
+
+            timeoutWork?()
+
+            try await waitUntil { client.sentResults.count == 1 }
+            #expect(client.sentResults.first?.state == .failed)
+            #expect(client.sentResults.first?.error == .homeAssistantUnavailable)
+            #expect(client.sentSections.isEmpty)
+        }
     }
 
     @Test func nonActionCapableItemFailsAsMissingActionWithoutExecuting() throws {
@@ -1274,7 +1435,7 @@ struct GarminIntegrationServiceTests {
         var didExecute = false
         let item = MagicItem(id: "climate.hallway", serverId: "server-1", type: .entity)
         let config = customConfig(actionItems: [item])
-        let service = GarminIntegrationService(client: client) { _, _, completion in
+        let service = GarminIntegrationService(client: client) { _, _, _, completion in
             didExecute = true
             completion(.success(()))
         }
@@ -1300,7 +1461,7 @@ struct GarminIntegrationServiceTests {
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
             let config = customConfig(actionItems: [item])
-            let service = GarminIntegrationService(client: client) { _, _, completion in
+            let service = GarminIntegrationService(client: client) { _, _, _, completion in
                 completion(.failure(.loginRequired))
             }
             let message = GarminInboundMessage(
@@ -1326,7 +1487,7 @@ struct GarminIntegrationServiceTests {
             var didExecute = false
             let item = MagicItem(id: "light.kitchen", serverId: "missing-server", type: .entity)
             let config = customConfig(actionItems: [item])
-            let service = GarminIntegrationService(client: client) { _, _, completion in
+            let service = GarminIntegrationService(client: client) { _, _, _, completion in
                 didExecute = true
                 completion(.success(()))
             }
@@ -1353,7 +1514,7 @@ struct GarminIntegrationServiceTests {
             let client = FakeGarminConnectIQClient()
             let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
             let config = customConfig(actionItems: [item])
-            let service = GarminIntegrationService(client: client) { _, _, completion in
+            let service = GarminIntegrationService(client: client) { _, _, _, completion in
                 completion(.success(()))
             }
             let message = GarminInboundMessage(
@@ -1384,7 +1545,7 @@ struct GarminIntegrationServiceTests {
             var requestedCacheModes: [Bool] = []
             let service = GarminIntegrationService(
                 client: client,
-                actionExecutor: { _, _, completion in
+                actionExecutor: { _, _, _, completion in
                     completion(.success(()))
                 },
                 delayedWorkScheduler: { _, work in
@@ -1426,7 +1587,7 @@ struct GarminIntegrationServiceTests {
             let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(
                 client: client,
-                actionExecutor: { _, _, completion in
+                actionExecutor: { _, _, _, completion in
                     completion(.success(()))
                 },
                 delayedWorkScheduler: { _, work in
@@ -1500,7 +1661,57 @@ struct GarminIntegrationServiceTests {
         }
     }
 
-    @Test func entityActionUsesDomainMainActionPath() throws {
+    @Test func lightEntityActionUsesDesiredStateService() throws {
+        try withWebhookCapture { capturedRequests in
+            let client = FakeGarminConnectIQClient()
+            let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
+            let config = customConfig(actionItems: [item])
+            let service = GarminIntegrationService(client: client)
+            let message = GarminInboundMessage(
+                type: .callAction,
+                id: GarminConfig.opaqueItemId(for: item),
+                correlationId: "c1",
+                actionId: "turn_on"
+            )
+
+            service.handle(message, config: config) { _ in }
+
+            let request = try #require(capturedRequests().first)
+            let data = try #require(request.data as? [String: Any])
+            let serviceData = try #require(data["service_data"] as? [String: Any])
+            #expect(request.type == "call_service")
+            #expect(data["domain"] as? String == "light")
+            #expect(data["service"] as? String == "turn_on")
+            #expect(serviceData["entity_id"] as? String == "light.kitchen")
+        }
+    }
+
+    @Test func coverEntityActionUsesDesiredStateService() throws {
+        try withWebhookCapture { capturedRequests in
+            let client = FakeGarminConnectIQClient()
+            let item = MagicItem(id: "cover.garage", serverId: "server-1", type: .entity)
+            let config = customConfig(actionItems: [item])
+            let service = GarminIntegrationService(client: client)
+            let message = GarminInboundMessage(
+                type: .callAction,
+                id: GarminConfig.opaqueItemId(for: item),
+                correlationId: "c1",
+                actionId: "close_cover"
+            )
+
+            service.handle(message, config: config) { _ in }
+
+            let request = try #require(capturedRequests().first)
+            let data = try #require(request.data as? [String: Any])
+            let serviceData = try #require(data["service_data"] as? [String: Any])
+            #expect(request.type == "call_service")
+            #expect(data["domain"] as? String == "cover")
+            #expect(data["service"] as? String == "close_cover")
+            #expect(serviceData["entity_id"] as? String == "cover.garage")
+        }
+    }
+
+    @Test func statefulEntityActionWithoutActionIdFailsUnsupported() throws {
         try withServer(identifier: "server-1") { server in
             let client = FakeGarminConnectIQClient()
             let api = HomeAssistantAPI(server: server)
@@ -1519,38 +1730,67 @@ struct GarminIntegrationServiceTests {
 
             service.handle(message, config: config) { _ in }
 
-            let request = try #require(connection.pendingRequests.first?.request)
-            #expect(request.type.command == "call_service")
-            #expect(request.data["domain"] as? String == "light")
-            #expect(request.data["service"] as? String == "toggle")
-            #expect((request.data["target"] as? [String: Any])?["entity_id"] as? String == "light.kitchen")
+            #expect(connection.pendingRequests.isEmpty)
+            #expect(client.sentResults.first?.state == .failed)
+            #expect(client.sentResults.first?.error == .unsupportedAction)
         }
     }
 
-    @Test func coverActionUsesDomainMainActionPath() throws {
-        try withServer(identifier: "server-1") { server in
+    @Test func mediaPlayerActionsUseIdempotentServices() throws {
+        defer { GarminHomeSummaryStateCache.shared.clear(serverId: "server-1") }
+        try withWebhookCapture { capturedRequests in
             let client = FakeGarminConnectIQClient()
-            let api = HomeAssistantAPI(server: server)
-            let connection = HAMockConnection()
-            api.connection = connection
-            Current.setCachedApi(api, for: server.identifier)
-
-            let item = MagicItem(id: "cover.garage", serverId: "server-1", type: .entity)
+            let item = MagicItem(id: "media_player.living_room", serverId: "server-1", type: .entity)
             let config = customConfig(actionItems: [item])
             let service = GarminIntegrationService(client: client)
-            let message = GarminInboundMessage(
+
+            GarminHomeSummaryStateCache.shared.setStates([
+                .init(entityId: item.id, state: "playing", attributes: ["supported_features": 1]),
+            ], serverId: "server-1")
+            service.handle(GarminInboundMessage(
                 type: .callAction,
                 id: GarminConfig.opaqueItemId(for: item),
-                correlationId: "c1"
-            )
+                correlationId: "pause",
+                actionId: "media_pause"
+            ), config: config) { _ in }
+            GarminHomeSummaryStateCache.shared.setStates([
+                .init(entityId: item.id, state: "paused", attributes: ["supported_features": 16_384]),
+            ], serverId: "server-1")
+            service.handle(GarminInboundMessage(
+                type: .callAction,
+                id: GarminConfig.opaqueItemId(for: item),
+                correlationId: "play",
+                actionId: "media_play"
+            ), config: config) { _ in }
 
-            service.handle(message, config: config) { _ in }
+            let requests = capturedRequests()
+            #expect(requests.count == 2)
+            #expect(requests.compactMap { ($0.data as? [String: Any])?["domain"] as? String } == ["media_player", "media_player"])
+            #expect(requests.compactMap { ($0.data as? [String: Any])?["service"] as? String } == ["media_pause", "media_play"])
+        }
+    }
 
-            let request = try #require(connection.pendingRequests.first?.request)
-            #expect(request.type.command == "call_service")
-            #expect(request.data["domain"] as? String == "cover")
-            #expect(request.data["service"] as? String == "toggle")
-            #expect((request.data["target"] as? [String: Any])?["entity_id"] as? String == "cover.garage")
+    @Test func mediaPlayerActionWithoutSupportedFeatureFailsUnsupported() throws {
+        defer { GarminHomeSummaryStateCache.shared.clear(serverId: "server-1") }
+        try withWebhookCapture { capturedRequests in
+            let client = FakeGarminConnectIQClient()
+            let item = MagicItem(id: "media_player.living_room", serverId: "server-1", type: .entity)
+            let config = customConfig(actionItems: [item])
+            let service = GarminIntegrationService(client: client)
+            GarminHomeSummaryStateCache.shared.setStates([
+                .init(entityId: item.id, state: "paused", attributes: ["supported_features": 0]),
+            ], serverId: "server-1")
+
+            service.handle(GarminInboundMessage(
+                type: .callAction,
+                id: GarminConfig.opaqueItemId(for: item),
+                correlationId: "play",
+                actionId: "media_play"
+            ), config: config) { _ in }
+
+            #expect(capturedRequests().isEmpty)
+            #expect(client.sentResults.first?.state == .failed)
+            #expect(client.sentResults.first?.error == .unsupportedAction)
         }
     }
 
@@ -1723,7 +1963,7 @@ struct GarminIntegrationServiceTests {
     }
 
     private func waitUntil(
-        timeout: TimeInterval = 1,
+        timeout: TimeInterval = 2,
         _ condition: () -> Bool
     ) async throws {
         let start = Date()
@@ -1753,6 +1993,21 @@ struct GarminIntegrationServiceTests {
                 "favorite_entities": favorites,
                 "hide_suggested_entities": hideSuggested,
             ],
+        ])
+    }
+
+    private func compressedStatesData(_ states: [String: (state: String, attributes: [String: Any])]) -> HAData {
+        let additions = states.mapValues { value -> [String: Any] in
+            [
+                "s": value.state,
+                "a": value.attributes,
+                "lc": "2026-06-06T10:00:00Z",
+                "lu": "2026-06-06T10:00:00Z",
+                "c": "context-id",
+            ]
+        }
+        return .dictionary([
+            "a": additions,
         ])
     }
 }

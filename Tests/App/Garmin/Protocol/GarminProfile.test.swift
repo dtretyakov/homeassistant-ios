@@ -65,7 +65,10 @@ struct GarminProfileTests {
                     domain: "sc"
                 ),
             ],
-            values: [.init(id: "e_status1", value: "20 C")],
+            values: [
+                .init(id: GarminOverviewSectionID.areas, value: "1 on"),
+                .init(id: "e_status1", value: "20 C"),
+            ],
             pageOffset: 15,
             pageLimit: 14,
             previousOffset: 0,
@@ -87,6 +90,7 @@ struct GarminProfileTests {
         #expect(encoded.contains("\"po\":0"))
         #expect(encoded.contains("\"no\":29"))
         #expect(encoded.contains("\"vals\""))
+        #expect(encoded.contains("\"v\":\"1 on\""))
         #expect(encoded.contains("\"v\":\"20 C\""))
         #expect(!encoded.contains("\"kind\""))
         #expect(!encoded.contains("\"section_etag\""))
@@ -148,6 +152,15 @@ struct GarminProfileTests {
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "device_tracker") == "dt")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "water_heater") == "wh")
         #expect(GarminSupportedDomains.compactDomainCode(rawDomain: "weather") == "w")
+    }
+
+    @Test func mediaPlayerIsStatusAndActionCapableWithoutProtocolVersionBump() {
+        let item = MagicItem(id: "media_player.living_room", serverId: "server-1", type: .entity)
+
+        #expect(GarminProtocolVersion.current == 3)
+        #expect(GarminSupportedDomains.supportsStatus(rawDomain: "media_player"))
+        #expect(GarminSupportedDomains.supportsAction(rawDomain: "media_player"))
+        #expect(GarminConfig.capability(for: item) == GarminConfig.valueCapability | GarminConfig.actionCapability)
     }
 
     @Test func notModifiedMessagesUseFlatCompactKeys() throws {
@@ -386,6 +399,53 @@ struct GarminProfileTests {
         #expect(section.values == [.init(id: GarminConfig.opaqueItemId(for: status), value: "21 C")])
     }
 
+    @Test func customMediaPlayerRowsAreActionCapableOnlyWithSupportedFeatures() throws {
+        let unsupported = MagicItem(
+            id: "media_player.unsupported",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Unsupported"
+        )
+        let supported = MagicItem(
+            id: "media_player.supported",
+            serverId: "server-1",
+            type: .entity,
+            displayText: "Supported"
+        )
+        let config = GarminConfig(
+            selectedServerId: "server-1",
+            serverConfigs: [.init(serverId: "server-1", customSections: [
+                .init(
+                    id: "custom-1",
+                    title: "Media",
+                    items: [
+                        .init(item: unsupported),
+                        .init(item: supported),
+                    ]
+                ),
+            ])]
+        )
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [] },
+            areaProvider: { _ in [] },
+            stateProvider: { _ in [
+                .init(entityId: unsupported.id, state: "paused", attributes: ["supported_features": 0]),
+                .init(entityId: supported.id, state: "paused", attributes: ["supported_features": 16_384]),
+            ] }
+        )
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.custom("custom-1"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.cap) == [
+            GarminConfig.valueCapability,
+            GarminConfig.valueCapability | GarminConfig.actionCapability,
+        ])
+    }
+
     @Test func areaAndSummaryDetailsResolveThroughOneSectionPath() throws {
         let kitchen = entity("light.kitchen", name: "Kitchen", domain: "light")
         let hall = entity("light.hall", name: "Hall", domain: "light")
@@ -397,7 +457,6 @@ struct GarminProfileTests {
             entityProvider: { [kitchen, hall] },
             areaProvider: { _ in [area("kitchen", name: "Kitchen", entities: ["light.kitchen"])] },
             summaryProvider: summaryProvider(
-                panels: [panel("light")],
                 states: [
                     .init(entityId: "light.kitchen", state: "on"),
                     .init(entityId: "light.hall", state: "off"),
@@ -427,9 +486,43 @@ struct GarminProfileTests {
         #expect(areaDetail.values == [.init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "on")])
         #expect(summaries.items.first?.type == .section)
         #expect(summaries.items.first?.id == GarminOverviewSectionID.summary("light"))
-        #expect(lights.items.map(\.label) == ["Kitchen"])
-        #expect(lights.items.map(\.domain) == ["l"])
-        #expect(lights.values.isEmpty)
+        #expect(summaries.values == [.init(id: GarminOverviewSectionID.summary("light"), value: "1 on")])
+        #expect(lights.items.map(\.label) == ["Kitchen", "Hall"])
+        #expect(lights.items.map(\.domain) == ["l", "l"])
+        #expect(lights.values == [
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "On"),
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.hall"), value: "Off"),
+        ])
+    }
+
+    @Test func summarySectionRowsCarryValuesWithoutProtocolVersionBump() throws {
+        let light = entity("light.kitchen", name: "Kitchen", domain: "light")
+        let media = entity("media_player.living_room", name: "Living room", domain: "media_player")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [light, media] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: light.entityId, state: "on"),
+                .init(entityId: media.entityId, state: "idle"),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summaries,
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(GarminProtocolVersion.current == 3)
+        #expect(section.items.map(\.id) == [
+            GarminOverviewSectionID.summary("light"),
+            GarminOverviewSectionID.summary("media_players"),
+        ])
+        #expect(section.values == [
+            .init(id: GarminOverviewSectionID.summary("light"), value: "1 on"),
+            .init(id: GarminOverviewSectionID.summary("media_players"), value: "No media playing"),
+        ])
     }
 
     @Test func favoritesSectionBuildsDirectRowsAndVisibleValueItems() throws {
@@ -596,7 +689,7 @@ struct GarminProfileTests {
         #expect(favorites == ["light.pinned"])
     }
 
-    @Test func summaryProviderBuildsCanonicalListWithPanelAndRegistryFilters() throws {
+    @Test func summaryProviderBuildsCanonicalListWithRegistryFilters() throws {
         let visibleLight = entity("light.visible", name: "Visible light", domain: "light")
         let hiddenLight = entity("light.hidden", name: "Hidden light", domain: "light")
         let diagnosticClimate = entity("climate.diagnostic", name: "Diagnostic climate", domain: "climate")
@@ -606,7 +699,6 @@ struct GarminProfileTests {
                 registry(entityId: hiddenLight.entityId, hiddenBy: "user"),
                 registry(entityId: diagnosticClimate.entityId, entityCategory: "diagnostic"),
             ],
-            panels: [panel("light"), panel("climate")],
             states: [
                 .init(entityId: visibleLight.entityId, state: "on"),
                 .init(entityId: hiddenLight.entityId, state: "on"),
@@ -621,18 +713,55 @@ struct GarminProfileTests {
         )
 
         #expect(summaries.map(\.id) == ["light", "media_players"])
+        #expect(summaries.map(\.value) == ["1 on", "1 playing"])
     }
 
-    @Test func summaryProviderRequiresLiveStatesAndDoesNotFallbackToAllEntities() throws {
+    @Test func summaryProviderRequiresLiveStatesAndDoesNotFallbackToLocalEntities() throws {
         let kitchen = entity("light.kitchen", name: "Kitchen", domain: "light")
         let hall = entity("light.hall", name: "Hall", domain: "light")
-        let provider = summaryProvider(panels: [panel("light")])
+        let provider = summaryProvider()
 
         let summaries = try provider.summaries(serverId: "server-1", entities: [kitchen, hall])
-        let contributors = try provider.contributors(serverId: "server-1", summaryId: "light", entities: [kitchen, hall])
+        let detailItems = try provider.detailItems(serverId: "server-1", summaryId: "light", entities: [kitchen, hall])
 
         #expect(summaries.isEmpty)
-        #expect(contributors.isEmpty)
+        #expect(detailItems.isEmpty)
+    }
+
+    @Test func summaryProviderBuildsFromRawStatesWhenLocalEntityCacheIsEmpty() throws {
+        let provider = summaryProvider(
+            registries: [
+                registry(entityId: "light.hidden", hiddenBy: "user"),
+            ],
+            states: [
+                .init(entityId: "light.kitchen", state: "on", attributes: ["friendly_name": "Kitchen"]),
+                .init(entityId: "sensor.remote_battery", state: "12", attributes: [
+                    "friendly_name": "Remote battery",
+                    "device_class": "battery",
+                ]),
+                .init(entityId: "light.hidden", state: "on"),
+            ]
+        )
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [])
+        let lights = try detailEntityIds(provider: provider, summaryId: "light", entities: [])
+        let maintenance = try detailEntityIds(provider: provider, summaryId: "maintenance", entities: [])
+
+        #expect(summaries.map(\.id) == ["light", "maintenance"])
+        #expect(summaries.map(\.value) == ["1 on", "1 low battery"])
+        #expect(lights == ["light.kitchen"])
+        #expect(maintenance == ["sensor.remote_battery"])
+    }
+
+    @Test func summaryProviderDoesNotUseAppPanelsAsHardGate() throws {
+        let light = entity("light.kitchen", name: "Kitchen", domain: "light")
+        let provider = summaryProvider(states: [
+            .init(entityId: light.entityId, state: "on"),
+        ])
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [light])
+
+        #expect(summaries.map(\.id) == ["light"])
     }
 
     @Test func summaryProviderUsesRawStateSnapshotForActiveContributors() throws {
@@ -641,7 +770,6 @@ struct GarminProfileTests {
         let unlocked = entity("lock.front_door", name: "Front door", domain: "lock")
         let locked = entity("lock.back_door", name: "Back door", domain: "lock")
         let provider = summaryProvider(
-            panels: [panel("light"), panel("security")],
             states: [
                 .init(entityId: onLight.entityId, state: "on"),
                 .init(entityId: offLight.entityId, state: "off"),
@@ -650,11 +778,11 @@ struct GarminProfileTests {
             ]
         )
 
-        let lights = try provider.contributors(serverId: "server-1", summaryId: "light", entities: [onLight, offLight])
-        let security = try provider.contributors(serverId: "server-1", summaryId: "security", entities: [unlocked, locked])
+        let lights = try detailEntityIds(provider: provider, summaryId: "light", entities: [onLight, offLight])
+        let security = try detailEntityIds(provider: provider, summaryId: "security", entities: [unlocked, locked])
 
-        #expect(lights.map(\.entityId) == [onLight.entityId])
-        #expect(security.map(\.entityId) == [unlocked.entityId])
+        #expect(lights == [onLight.entityId, offLight.entityId])
+        #expect(security == [unlocked.entityId, locked.entityId])
     }
 
     @Test func summaryProviderMatchesHomeAssistantSecurityFiltersAndImportantStates() throws {
@@ -667,7 +795,6 @@ struct GarminProfileTests {
             registries: [
                 registry(entityId: tamper.entityId, entityCategory: "diagnostic"),
             ],
-            panels: [panel("security")],
             states: [
                 .init(entityId: camera.entityId, state: "idle"),
                 .init(entityId: gate.entityId, state: "open"),
@@ -678,10 +805,45 @@ struct GarminProfileTests {
         )
 
         let summaries = try provider.summaries(serverId: "server-1", entities: [camera, gate, smoke, tamper, locked])
-        let contributors = try provider.contributors(serverId: "server-1", summaryId: "security", entities: [camera, gate, smoke, tamper, locked])
+        let detailIds = try detailEntityIds(provider: provider, summaryId: "security", entities: [camera, gate, smoke, tamper, locked])
 
         #expect(summaries.map(\.id) == ["security"])
-        #expect(contributors.map(\.entityId) == [gate.entityId, smoke.entityId, tamper.entityId])
+        #expect(summaries.map(\.value) == ["All secure"])
+        #expect(detailIds == [gate.entityId, smoke.entityId, tamper.entityId, locked.entityId])
+    }
+
+    @Test func summarySectionFiltersUnsupportedRowsBeforeSendingToWatch() throws {
+        let camera = entity("camera.porch", name: "Porch camera", domain: "camera")
+        let lock = entity("lock.back", name: "Back lock", domain: "lock")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [camera, lock] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: camera.entityId, state: "idle"),
+                .init(entityId: lock.entityId, state: "locked"),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("security"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.label) == ["Back lock"])
+        #expect(section.items.map(\.domain) == ["lk"])
+    }
+
+    @Test func summaryCategoryDisappearsWhenOnlyUnsupportedRowsRemain() throws {
+        let camera = entity("camera.porch", name: "Porch camera", domain: "camera")
+        let provider = summaryProvider(states: [
+            .init(entityId: camera.entityId, state: "idle"),
+        ])
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [camera])
+
+        #expect(summaries.isEmpty)
     }
 
     @Test func summaryProviderUsesHomeAssistantMaintenanceThresholds() throws {
@@ -691,7 +853,6 @@ struct GarminProfileTests {
         let unknown = entity("sensor.unknown_battery", name: "Unknown battery", domain: "sensor", deviceClass: "battery")
         let binaryLow = entity("binary_sensor.remote_battery", name: "Remote battery", domain: "binary_sensor", deviceClass: "battery")
         let provider = summaryProvider(
-            panels: [panel("maintenance")],
             states: [
                 .init(entityId: low.entityId, state: "20"),
                 .init(entityId: ok.entityId, state: "21"),
@@ -701,23 +862,26 @@ struct GarminProfileTests {
             ]
         )
 
-        let contributors = try provider.contributors(
+        let detailIds = try detailEntityIds(
+            provider: provider,
             serverId: "server-1",
             summaryId: "maintenance",
             entities: [low, ok, unavailable, unknown, binaryLow]
         )
 
-        #expect(contributors.map(\.entityId) == [low.entityId, unavailable.entityId, binaryLow.entityId])
+        let summaries = try provider.summaries(serverId: "server-1", entities: [low, ok, unavailable, unknown, binaryLow])
+
+        #expect(summaries.map(\.value) == ["2 low batteries, 1 unavailable device"])
+        #expect(detailIds == [low.entityId, binaryLow.entityId, unavailable.entityId, unknown.entityId, ok.entityId])
     }
 
-    @Test func summaryProviderMatchesHomeAssistantClimateFiltersWithoutShowingIdleDevices() throws {
+    @Test func summaryProviderMatchesHomeAssistantClimateFiltersAndKeepsIdleDevicesInDetail() throws {
         let climateIdle = entity("climate.hall", name: "Hall climate", domain: "climate")
         let fan = entity("fan.ceiling", name: "Ceiling fan", domain: "fan")
         let humidifier = entity("humidifier.bedroom", name: "Bedroom humidifier", domain: "humidifier")
         let windowCover = entity("cover.window", name: "Window cover", domain: "cover", deviceClass: "window")
         let windowSensor = entity("binary_sensor.window", name: "Window", domain: "binary_sensor", deviceClass: "window")
         let provider = summaryProvider(
-            panels: [panel("climate")],
             states: [
                 .init(entityId: climateIdle.entityId, state: "idle"),
                 .init(entityId: fan.entityId, state: "on"),
@@ -728,10 +892,10 @@ struct GarminProfileTests {
         )
 
         let summaries = try provider.summaries(serverId: "server-1", entities: [climateIdle, fan, humidifier, windowCover, windowSensor])
-        let contributors = try provider.contributors(serverId: "server-1", summaryId: "climate", entities: [climateIdle, fan, humidifier, windowCover, windowSensor])
+        let detailIds = try detailEntityIds(provider: provider, summaryId: "climate", entities: [climateIdle, fan, humidifier, windowCover, windowSensor])
 
-        #expect(summaries.map(\.id) == ["climate"])
-        #expect(contributors.map(\.entityId) == [fan.entityId, windowCover.entityId, windowSensor.entityId])
+        #expect(summaries.map(\.id) == ["climate", "security"])
+        #expect(detailIds == [fan.entityId, windowSensor.entityId, windowCover.entityId, humidifier.entityId, climateIdle.entityId])
     }
 
     @Test func summaryProviderTreatsWeatherAsSingleSummaryTile() throws {
@@ -739,23 +903,181 @@ struct GarminProfileTests {
         let aWeather = entity("weather.a_outside", name: "A outside", domain: "weather")
         let provider = summaryProvider(states: [
             .init(entityId: zWeather.entityId, state: "sunny"),
-            .init(entityId: aWeather.entityId, state: "cloudy"),
+            .init(entityId: aWeather.entityId, state: "cloudy", attributes: [
+                "temperature": 18.5,
+                "temperature_unit": "C",
+            ]),
         ])
 
         let summaries = try provider.summaries(serverId: "server-1", entities: [zWeather, aWeather])
-        let contributors = try provider.contributors(serverId: "server-1", summaryId: "weather", entities: [zWeather, aWeather])
+        let detailItems = try provider.detailItems(serverId: "server-1", summaryId: "weather", entities: [zWeather, aWeather])
 
         #expect(summaries.map(\.id) == ["weather"])
-        #expect(contributors.map(\.entityId) == [aWeather.entityId])
+        #expect(summaries.map(\.value) == ["18.5 C · Cloudy"])
+        #expect(detailItems.map(\.item.label) == ["Condition", "Temperature"])
     }
 
-    @Test func summaryProviderSupportsLegacySummaryAliases() throws {
+    @Test func summaryWeatherDetailBuildsSyntheticAttributeRows() throws {
+        let weather = entity("weather.home", name: "Home weather", domain: "weather")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [weather] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: weather.entityId, state: "partlycloudy", attributes: [
+                    "temperature": 18.5,
+                    "temperature_unit": "°C",
+                    "humidity": 44,
+                    "pressure": 1012,
+                    "pressure_unit": "hPa",
+                    "wind_speed": 5.2,
+                    "wind_speed_unit": "km/h",
+                ]),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("weather"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.label) == ["Condition", "Temperature", "Humidity", "Pressure", "Wind speed"])
+        #expect(section.items.map(\.domain) == ["w", "w", "w", "w", "w"])
+        #expect(section.values.map(\.value) == ["Partly Cloudy", "18.5 °C", "44 %", "1012 hPa", "5.2 km/h"])
+    }
+
+    @Test func summaryProviderRejectsLegacySummaryAliases() throws {
         let provider = summaryProvider()
 
-        #expect(provider.canonicalSummaryId("lights") == "light")
-        #expect(provider.canonicalSummaryId("locks") == "security")
-        #expect(provider.canonicalSummaryId("openings") == "security")
-        #expect(provider.canonicalSummaryId("people") == nil)
+        #expect(!provider.isSupportedSummaryId("lights"))
+        #expect(!provider.isSupportedSummaryId("locks"))
+        #expect(!provider.isSupportedSummaryId("openings"))
+        #expect(!provider.isSupportedSummaryId("people"))
+        #expect(provider.isSupportedSummaryId("persons"))
+    }
+
+    @Test func summaryProviderBuildsPersonsSummaryAndHomeFirstDetail() throws {
+        let alice = entity("person.alice", name: "Alice", domain: "person")
+        let bob = entity("person.bob", name: "Bob", domain: "person")
+        let provider = summaryProvider(states: [
+            .init(entityId: alice.entityId, state: "home"),
+            .init(entityId: bob.entityId, state: "not_home"),
+        ])
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [bob, alice])
+        let detailIds = try detailEntityIds(provider: provider, summaryId: "persons", entities: [bob, alice])
+
+        #expect(summaries.map(\.id) == ["persons"])
+        #expect(summaries.map(\.value) == ["1 home"])
+        #expect(detailIds == [alice.entityId, bob.entityId])
+    }
+
+    @Test func summaryPersonsDetailUsesHumanReadableValues() throws {
+        let alice = entity("person.alice", name: "Alice", domain: "person")
+        let bob = entity("person.bob", name: "Bob", domain: "person")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [alice, bob] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: alice.entityId, state: "home"),
+                .init(entityId: bob.entityId, state: "not_home"),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("persons"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.values == [
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: alice.entityId), value: "Home"),
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: bob.entityId), value: "Away"),
+        ])
+    }
+
+    @Test func summaryProviderBuildsMediaSummaryButKeepsIdlePlayersInDetail() throws {
+        let livingRoom = entity("media_player.living_room", name: "Living room", domain: "media_player")
+        let bedroom = entity("media_player.bedroom", name: "Bedroom", domain: "media_player")
+        let provider = summaryProvider(states: [
+            .init(entityId: livingRoom.entityId, state: "idle", attributes: ["supported_features": 16_384]),
+            .init(entityId: bedroom.entityId, state: "off", attributes: ["supported_features": 0]),
+        ])
+
+        let summaries = try provider.summaries(serverId: "server-1", entities: [livingRoom, bedroom])
+        let detailIds = try detailEntityIds(provider: provider, summaryId: "media_players", entities: [livingRoom, bedroom])
+
+        #expect(summaries.map(\.id) == ["media_players"])
+        #expect(summaries.map(\.value) == ["No media playing"])
+        #expect(detailIds == [bedroom.entityId, livingRoom.entityId])
+    }
+
+    @Test func summaryMediaPlayersAreControllableRows() throws {
+        let media = entity("media_player.living_room", name: "Living room", domain: "media_player")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [media] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: media.entityId, state: "paused", attributes: ["supported_features": 16_384]),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("media_players"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.cap) == [GarminConfig.valueCapability | GarminConfig.actionCapability])
+        #expect(section.items.map(\.domain) == ["mp"])
+        #expect(section.values.map(\.value) == ["Paused"])
+    }
+
+    @Test func summaryUnavailableMediaPlayersAreStatusOnlyRows() throws {
+        let media = entity("media_player.living_room", name: "Living room", domain: "media_player")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [media] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: media.entityId, state: "unavailable"),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("media_players"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.cap) == [GarminConfig.valueCapability])
+        #expect(section.items.map(\.domain) == ["mp"])
+        #expect(section.values.map(\.value) == ["Unavailable"])
+    }
+
+    @Test func summaryMediaPlayersWithoutSupportedFeatureAreStatusOnlyRows() throws {
+        let media = entity("media_player.living_room", name: "Living room", domain: "media_player")
+        let source = GarminHomeOverviewSource(
+            entityProvider: { [media] },
+            areaProvider: { _ in [] },
+            summaryProvider: summaryProvider(states: [
+                .init(entityId: media.entityId, state: "paused", attributes: ["supported_features": 0]),
+            ])
+        )
+        let config = GarminConfig(selectedServerId: "server-1")
+
+        let section = try #require(try source.section(
+            id: GarminOverviewSectionID.summary("media_players"),
+            config: config,
+            itemInfo: { _ in nil }
+        ))
+
+        #expect(section.items.map(\.cap) == [GarminConfig.valueCapability])
+        #expect(section.items.map(\.domain) == ["mp"])
+        #expect(section.values.map(\.value) == ["Paused"])
     }
 
     @Test func summaryDetailSectionCanBuildWithoutDisplayValueProvider() throws {
@@ -765,7 +1087,6 @@ struct GarminProfileTests {
             entityProvider: { [kitchen, hall] },
             areaProvider: { _ in [] },
             summaryProvider: summaryProvider(
-                panels: [panel("light")],
                 states: [
                     .init(entityId: kitchen.entityId, state: "on"),
                     .init(entityId: hall.entityId, state: "off"),
@@ -780,9 +1101,10 @@ struct GarminProfileTests {
             itemInfo: { _ in nil }
         ))
 
-        #expect(section.items.map(\.label) == ["Kitchen"])
+        #expect(section.items.map(\.label) == ["Kitchen", "Hall"])
         #expect(section.items.map(\.id) == [
             GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"),
+            GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.hall"),
         ])
     }
 
@@ -1009,28 +1331,26 @@ struct GarminProfileTests {
 
     private func summaryProvider(
         registries: [AppEntityRegistry] = [],
-        panels: [AppPanel] = [],
         states: [GarminHomeSummaryEntityState] = []
     ) -> GarminHomeSummaryProvider {
         GarminHomeSummaryProvider(
             registryProvider: { _ in registries },
-            panelProvider: { _ in panels },
             stateProvider: { _ in states }
         )
     }
 
-    private func fakeFavoritesProvider(_ favorites: [HAAppEntity]) -> GarminHomeFavoritesProviding {
-        FakeGarminHomeFavoritesProvider(favorites: favorites)
+    private func detailEntityIds(
+        provider: GarminHomeSummaryProvider,
+        serverId: String = "server-1",
+        summaryId: String,
+        entities: [HAAppEntity]
+    ) throws -> [String] {
+        try provider.detailItems(serverId: serverId, summaryId: summaryId, entities: entities)
+            .compactMap(\.valueItem?.id)
     }
 
-    private func panel(_ path: String) -> AppPanel {
-        AppPanel(
-            serverId: "server-1",
-            title: path,
-            path: path,
-            component: path,
-            showInSidebar: true
-        )
+    private func fakeFavoritesProvider(_ favorites: [HAAppEntity]) -> GarminHomeFavoritesProviding {
+        FakeGarminHomeFavoritesProvider(favorites: favorites)
     }
 
     private func registry(

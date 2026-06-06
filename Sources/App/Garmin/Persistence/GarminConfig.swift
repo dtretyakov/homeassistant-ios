@@ -290,6 +290,7 @@ public enum GarminSupportedDomains {
         .inputBoolean,
         .cover,
         .lock,
+        .mediaPlayer,
     ]
 
     public static var actionDomainRawValues: [String] {

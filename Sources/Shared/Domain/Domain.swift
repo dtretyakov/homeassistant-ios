@@ -12,6 +12,7 @@ public enum Domain: String, CaseIterable {
     case inputButton = "input_button"
     case light
     case lock
+    case mediaPlayer = "media_player"
     case scene
     case script
     case `switch`
@@ -213,6 +214,8 @@ public enum Domain: String, CaseIterable {
             image = .lightbulbIcon
         case .lock:
             image = .lockIcon
+        case .mediaPlayer:
+            image = .playCircleIcon
         case .scene:
             image = .paletteOutlineIcon
         case .script:
@@ -339,7 +342,7 @@ public extension Domain {
             return .toggle
         case .lock:
             return nil // Lock requires state-aware action (lock/unlock)
-        case .sensor, .binarySensor, .zone, .person, .camera, .todo, .climate:
+        case .sensor, .binarySensor, .zone, .person, .camera, .todo, .climate, .mediaPlayer:
             return nil // Read-only or complex domains
         }
     }

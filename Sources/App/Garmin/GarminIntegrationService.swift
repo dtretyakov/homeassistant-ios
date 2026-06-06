@@ -6,7 +6,7 @@ import Shared
 import UserNotifications
 
 final class GarminIntegrationService {
-    typealias ActionExecutor = (MagicItem, Server, @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) -> Void
+    typealias ActionExecutor = (MagicItem, Server, String?, @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void) -> Void
     typealias ItemInfoProvider = (MagicItem) -> MagicItem.Info?
     typealias StatusSnapshotProvider = (
         GarminConfig,
@@ -16,6 +16,8 @@ final class GarminIntegrationService {
     ) -> Void
     typealias OverviewSourceProvider = () -> GarminHomeOverviewSource
     typealias DelayedWorkScheduler = (TimeInterval, @escaping () -> Void) -> Void
+
+    private static let summaryStatePrefetchTimeout: TimeInterval = 5
 
     private let client: GarminConnectIQClient
     private let actionExecutor: ActionExecutor
@@ -195,7 +197,11 @@ final class GarminIntegrationService {
         let pageOffset = message.pageOffset
         let pageLimit = GarminOverviewSection.sanitizedLimit(message.pageLimit ?? GarminConfig.maxSectionItems)
 
-        prefetchBuiltInSectionDataIfNeeded(sectionId: sectionId, config: config) { [weak self] in
+        prefetchBuiltInSectionDataIfNeeded(sectionId: sectionId, config: config) { [weak self] error in
+            if let error {
+                self?.send(.init(id: sectionId, correlationId: message.correlationId, state: .failed, error: error), completion: completion)
+                return
+            }
             self?.sendSectionResponse(
                 message: message,
                 config: config,
@@ -213,7 +219,7 @@ final class GarminIntegrationService {
     private func prefetchBuiltInSectionDataIfNeeded(
         sectionId: String,
         config: GarminConfig,
-        completion: @escaping () -> Void
+        completion: @escaping (GarminIntegrationError?) -> Void
     ) {
         prefetchFavoritesIfNeeded(sectionId: sectionId, config: config) {
             self.prefetchSummaryStatesIfNeeded(sectionId: sectionId, config: config, completion: completion)
@@ -411,38 +417,39 @@ final class GarminIntegrationService {
     private func prefetchSummaryStatesIfNeeded(
         sectionId: String,
         config: GarminConfig,
-        completion: @escaping () -> Void
+        completion: @escaping (GarminIntegrationError?) -> Void
     ) {
         guard sectionId == GarminOverviewSectionID.summaries || sectionId == "summaries" || sectionId.hasPrefix("summary:") else {
-            completion()
+            completion(nil)
             return
         }
         guard let serverId = config.selectedServerId ?? config.customItems.first?.serverId else {
-            completion()
+            completion(nil)
+            return
+        }
+        guard GarminHomeSummaryStateCache.shared.beginFetch(serverId: serverId, completion: { success in
+            completion(success ? nil : .homeAssistantUnavailable)
+        }) else {
             return
         }
         guard let server = Current.servers.server(forServerIdentifier: serverId),
               let connection = Current.api(for: server)?.connection else {
-            GarminHomeSummaryStateCache.shared.clear(serverId: serverId)
-            completion()
+            GarminHomeSummaryStateCache.shared.failFetch(serverId: serverId)
             return
         }
 
-        let gate = GarminOneShotCompletion(completion)
-        delayedWorkScheduler(1.0) {
-            gate.complete()
+        delayedWorkScheduler(Self.summaryStatePrefetchTimeout) {
+            GarminHomeSummaryStateCache.shared.failFetch(serverId: serverId)
         }
 
-        connection.caches.states().once().promise
-            .map { states in states.all.map(GarminHomeSummaryEntityState.init(entity:)) }
-            .done { states in
-                GarminHomeSummaryStateCache.shared.setStates(states, serverId: serverId)
-                gate.complete()
-            }
-            .catch { _ in
-                GarminHomeSummaryStateCache.shared.clear(serverId: serverId)
-                gate.complete()
-            }
+        let cancellable = connection.caches.states().once { states in
+            GarminHomeSummaryStateCache.shared.setStates(
+                states.all.map(GarminHomeSummaryEntityState.init(entity:)),
+                serverId: serverId
+            )
+            GarminHomeSummaryStateCache.shared.completeFetch(serverId: serverId)
+        }
+        GarminHomeSummaryStateCache.shared.setFetchCancellable(cancellable, serverId: serverId)
     }
 
     private func pageSizedSection(
@@ -646,7 +653,7 @@ final class GarminIntegrationService {
             return
         }
 
-        actionExecutor(item, server) { [weak self] executionResult in
+        actionExecutor(item, server, message.actionId) { [weak self] executionResult in
             let result: GarminCommandResult
             switch executionResult {
             case .success:
@@ -1171,6 +1178,7 @@ private enum GarminActionExecutor {
     static func execute(
         item: MagicItem,
         server: Server,
+        actionId: String?,
         completion: @escaping (Swift.Result<Void, GarminIntegrationError>) -> Void
     ) {
         guard GarminSupportedDomains.supportsAction(item) else {
@@ -1185,8 +1193,16 @@ private enum GarminActionExecutor {
         let request: Promise<Void>?
         switch item.type {
         case .script:
+            guard isTurnOnAction(actionId) else {
+                completion(.failure(.unsupportedAction))
+                return
+            }
             request = api.turnOnScript(scriptEntityId: item.id, triggerSource: .Garmin)
         case .scene:
+            guard isTurnOnAction(actionId) else {
+                completion(.failure(.unsupportedAction))
+                return
+            }
             request = api.CallService(
                 domain: Domain.scene.rawValue,
                 service: Service.turnOn.rawValue,
@@ -1199,16 +1215,19 @@ private enum GarminActionExecutor {
                 completion(.failure(.entityRemoved))
                 return
             }
-            if domain == .lock {
-                request = api.connection.send(HATypedRequest<[HAEntity]>.fetchStates()).promise.then { states -> Promise<Void> in
-                    guard let state = states.first(where: { $0.entityId == item.id })?.state else {
-                        return .value
-                    }
-                    return api.executeActionForDomainType(domain: domain, entityId: item.id, state: state)
-                }
-            } else {
-                request = api.executeActionForDomainType(domain: domain, entityId: item.id, state: "")
+            guard let actionId,
+                  let service = GarminDesiredStateActionResolver.service(for: domain, actionId: actionId),
+                  isActionCurrentlySupported(item: item, domain: domain, actionId: actionId) else {
+                completion(.failure(.unsupportedAction))
+                return
             }
+            request = api.CallService(
+                domain: domain.rawValue,
+                service: service.rawValue,
+                serviceData: ["entity_id": item.id],
+                triggerSource: .Garmin,
+                shouldLog: true
+            )
         case .action, .folder, .assistPipeline, .assistPrompt:
             request = nil
         }
@@ -1226,6 +1245,24 @@ private enum GarminActionExecutor {
                 completion(.failure(map(error: error)))
             }
         }
+    }
+
+    private static func isTurnOnAction(_ actionId: String?) -> Bool {
+        actionId == nil || actionId == Service.turnOn.rawValue
+    }
+
+    private static func isActionCurrentlySupported(item: MagicItem, domain: Domain, actionId: String) -> Bool {
+        guard domain == .mediaPlayer else { return true }
+        guard let state = GarminHomeSummaryStateCache.shared
+            .states(serverId: item.serverId)
+            .first(where: { $0.entityId == item.id }) else {
+            return false
+        }
+        return GarminDesiredStateActionResolver.actionId(
+            rawDomain: domain.rawValue,
+            state: state.state,
+            attributes: state.attributes
+        ) == actionId
     }
 
     static func map(error: Error) -> GarminIntegrationError {

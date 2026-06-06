@@ -10,5 +10,7 @@ public enum Service: String, CaseIterable {
     case open = "open"
     case openCover = "open_cover"
     case closeCover = "close_cover"
+    case mediaPlay = "media_play"
+    case mediaPause = "media_pause"
     case trigger = "trigger"
 }
