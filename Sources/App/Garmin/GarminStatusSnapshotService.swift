@@ -209,7 +209,7 @@ final class GarminStatusSnapshotService {
         guard let server = Current.servers.server(forServerIdentifier: item.serverId) else {
             return .init(
                 index: index,
-                value: statusValue(for: item, label: label, value: "Unavailable", iconName: iconName),
+                value: statusValue(for: item, label: label, value: Domain.State.unavailable.rawValue, iconName: iconName),
                 hadFetchFailure: true
             )
         }
@@ -218,13 +218,13 @@ final class GarminStatusSnapshotService {
             let state = try await stateProvider(item, server)
             return .init(
                 index: index,
-                value: statusValue(for: item, label: label, value: displayValue(for: state), iconName: iconName),
+                value: statusValue(for: item, label: label, value: protocolValue(for: state), iconName: iconName),
                 hadFetchFailure: false
             )
         } catch {
             return .init(
                 index: index,
-                value: statusValue(for: item, label: label, value: "Unavailable", iconName: iconName),
+                value: statusValue(for: item, label: label, value: Domain.State.unavailable.rawValue, iconName: iconName),
                 hadFetchFailure: true
             )
         }
@@ -234,7 +234,41 @@ final class GarminStatusSnapshotService {
         item: MagicItem,
         server: Server
     ) async throws -> ControlEntityProvider.State? {
-        try await ControlEntityProvider(domains: []).stateResult(server: server, entityId: item.id)
+        guard let connection = Current.api(for: server)?.connection else {
+            Current.Log.error("No API available to fetch Garmin status state")
+            throw GarminIntegrationError.homeAssistantUnavailable
+        }
+
+        let result = await withCheckedContinuation { continuation in
+            connection.send(.init(
+                type: .rest(.get, "states/\(item.id)"),
+                shouldRetry: true
+            )) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        let data = try result.get()
+        guard case let .dictionary(state) = data else {
+            Current.Log.error("Failed to get Garmin status state: bad response data")
+            throw GarminIntegrationError.homeAssistantUnavailable
+        }
+
+        let rawState = ((state["state"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let attributes = state["attributes"] as? [String: Any]
+        let unitOfMeasurement = attributes?["unit_of_measurement"] as? String
+        let value = StatePrecision.adjustPrecision(
+            serverId: server.identifier.rawValue,
+            entityId: item.id,
+            stateValue: rawState
+        )
+
+        return .init(
+            value: value,
+            unitOfMeasurement: unitOfMeasurement,
+            domainState: Domain.State(rawValue: rawState.lowercased())
+        )
     }
 
     private func statusValue(
@@ -251,12 +285,17 @@ final class GarminStatusSnapshotService {
         )
     }
 
-    private func displayValue(for state: ControlEntityProvider.State?) -> String {
-        guard let state else { return "Unavailable" }
-        let value = state.value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return "Unavailable" }
+    private func protocolValue(for state: ControlEntityProvider.State?) -> String {
+        guard let state else { return Domain.State.unavailable.rawValue }
+        let unit = state.unitOfMeasurement?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if unit?.isEmpty != false, let domainState = state.domainState {
+            return domainState.rawValue
+        }
 
-        if let unit = state.unitOfMeasurement?.trimmingCharacters(in: .whitespacesAndNewlines),
+        let value = state.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return Domain.State.unavailable.rawValue }
+
+        if let unit,
            !unit.isEmpty,
            !value.contains(unit) {
             return "\(value) \(unit)"

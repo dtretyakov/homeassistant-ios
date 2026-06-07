@@ -574,7 +574,7 @@ final class GarminHomeSummaryProvider: GarminHomeSummaryProviding {
                 confirmation: confirmation(for: magicItem),
                 domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain)
             ),
-            value: displayValue(entity: entity, context: context),
+            value: protocolValue(entity: entity, context: context),
             valueItem: magicItem
         )
     }
@@ -754,15 +754,17 @@ final class GarminHomeSummaryProvider: GarminHomeSummaryProviding {
         context.statesByEntityId[entity.entityId]?.attributes ?? [:]
     }
 
-    private func displayValue(entity: HAAppEntity, context: SummaryContext) -> String? {
+    private func protocolValue(entity: HAAppEntity, context: SummaryContext) -> String? {
         guard let state = context.statesByEntityId[entity.entityId] else { return nil }
-        let value = entity.domain == "person" ? displayPersonState(state.state) : displayState(state.state)
+        let rawValue = state.state.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawValue.isEmpty else { return nil }
+        let normalizedValue = rawValue.lowercased()
         guard let unit = state.attributes["unit_of_measurement"] as? String,
               !unit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !value.contains(unit) else {
-            return value
+              !rawValue.contains(unit) else {
+            return normalizedValue
         }
-        return "\(value) \(unit)"
+        return "\(rawValue) \(unit)"
     }
 
     private func deviceClass(entity: HAAppEntity, context: SummaryContext) -> String {

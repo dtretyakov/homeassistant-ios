@@ -1266,6 +1266,7 @@
 		5A01B0162F30000A00C0D019 /* GarminDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0152F30000A00C0D019 /* GarminDiagnostics.swift */; };
 		5A01B0182F30000B00C0D019 /* GarminDiagnostics.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0172F30000B00C0D019 /* GarminDiagnostics.test.swift */; };
 		5A01B01A2F30000C00C0D019 /* GarminOutboundMessageQueue.test.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0192F30000C00C0D019 /* GarminOutboundMessageQueue.test.swift */; };
+		5A01B0652F30006200C0D062 /* GarminPendingDesiredValueGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0642F30006200C0D062 /* GarminPendingDesiredValueGate.swift */; };
 		5A01B0212F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0202F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift */; };
 		5A01B0232F30002100C0D020 /* Persistence/GarminPromptOutbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0222F30002100C0D020 /* Persistence/GarminPromptOutbox.swift */; };
 		5A01B0252F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A01B0242F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift */; };
@@ -3142,6 +3143,7 @@
 		5A01B0152F30000A00C0D019 /* GarminDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminDiagnostics.swift; sourceTree = "<group>"; };
 		5A01B0172F30000B00C0D019 /* GarminDiagnostics.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminDiagnostics.test.swift; sourceTree = "<group>"; };
 		5A01B0192F30000C00C0D019 /* GarminOutboundMessageQueue.test.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminOutboundMessageQueue.test.swift; sourceTree = "<group>"; };
+		5A01B0642F30006200C0D062 /* GarminPendingDesiredValueGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GarminPendingDesiredValueGate.swift; sourceTree = "<group>"; };
 		5A01B0202F30002000C0D020 /* Persistence/GarminDatabaseSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminDatabaseSchema.swift; sourceTree = "<group>"; };
 		5A01B0222F30002100C0D020 /* Persistence/GarminPromptOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminPromptOutbox.swift; sourceTree = "<group>"; };
 		5A01B0242F30002200C0D020 /* Persistence/GarminPromptOutboxTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GarminPromptOutboxTable.swift; sourceTree = "<group>"; };
@@ -6706,6 +6708,7 @@
 				5A01B0622F30006100C0D061 /* GarminHomeFavoritesProvider.swift */,
 				5A01B0072F30000300C0D017 /* GarminStatusSnapshotService.swift */,
 				5A01B0112F30000800C0D017 /* GarminStatusObservationService.swift */,
+				5A01B0642F30006200C0D062 /* GarminPendingDesiredValueGate.swift */,
 				5A01B0152F30000A00C0D019 /* GarminDiagnostics.swift */,
 			);
 			path = Garmin;
@@ -9722,6 +9725,7 @@
 				5A01B0632F30006100C0D061 /* GarminHomeFavoritesProvider.swift in Sources */,
 				5A01B0082F30000300C0D017 /* GarminStatusSnapshotService.swift in Sources */,
 				5A01B0122F30000800C0D017 /* GarminStatusObservationService.swift in Sources */,
+				5A01B0652F30006200C0D062 /* GarminPendingDesiredValueGate.swift in Sources */,
 				5A01B0162F30000A00C0D019 /* GarminDiagnostics.swift in Sources */,
 				43B0E2B127220A671F4621AF /* GarminConfigurationView.swift in Sources */,
 				B633853A7E625DE51B9F1B96 /* GarminConfigurationViewModel.swift in Sources */,

@@ -490,8 +490,8 @@ struct GarminProfileTests {
         #expect(lights.items.map(\.label) == ["Kitchen", "Hall"])
         #expect(lights.items.map(\.domain) == ["l", "l"])
         #expect(lights.values == [
-            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "On"),
-            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.hall"), value: "Off"),
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.kitchen"), value: "on"),
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: "light.hall"), value: "off"),
         ])
     }
 
@@ -973,7 +973,7 @@ struct GarminProfileTests {
         #expect(detailIds == [alice.entityId, bob.entityId])
     }
 
-    @Test func summaryPersonsDetailUsesHumanReadableValues() throws {
+    @Test func summaryPersonsDetailUsesRawProtocolValues() throws {
         let alice = entity("person.alice", name: "Alice", domain: "person")
         let bob = entity("person.bob", name: "Bob", domain: "person")
         let source = GarminHomeOverviewSource(
@@ -993,8 +993,8 @@ struct GarminProfileTests {
         ))
 
         #expect(section.values == [
-            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: alice.entityId), value: "Home"),
-            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: bob.entityId), value: "Away"),
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: alice.entityId), value: "home"),
+            .init(id: GarminConfig.opaqueEntityId(serverId: "server-1", entityId: bob.entityId), value: "not_home"),
         ])
     }
 
@@ -1033,7 +1033,7 @@ struct GarminProfileTests {
 
         #expect(section.items.map(\.cap) == [GarminConfig.valueCapability | GarminConfig.actionCapability])
         #expect(section.items.map(\.domain) == ["mp"])
-        #expect(section.values.map(\.value) == ["Paused"])
+        #expect(section.values.map(\.value) == ["paused"])
     }
 
     @Test func summaryUnavailableMediaPlayersAreStatusOnlyRows() throws {
@@ -1055,7 +1055,7 @@ struct GarminProfileTests {
 
         #expect(section.items.map(\.cap) == [GarminConfig.valueCapability])
         #expect(section.items.map(\.domain) == ["mp"])
-        #expect(section.values.map(\.value) == ["Unavailable"])
+        #expect(section.values.map(\.value) == ["unavailable"])
     }
 
     @Test func summaryMediaPlayersWithoutSupportedFeatureAreStatusOnlyRows() throws {
@@ -1077,7 +1077,7 @@ struct GarminProfileTests {
 
         #expect(section.items.map(\.cap) == [GarminConfig.valueCapability])
         #expect(section.items.map(\.domain) == ["mp"])
-        #expect(section.values.map(\.value) == ["Paused"])
+        #expect(section.values.map(\.value) == ["paused"])
     }
 
     @Test func summaryDetailSectionCanBuildWithoutDisplayValueProvider() throws {

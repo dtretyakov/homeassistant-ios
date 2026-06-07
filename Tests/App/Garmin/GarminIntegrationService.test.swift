@@ -1255,11 +1255,11 @@ struct GarminIntegrationServiceTests {
         #expect(client.sentSections.last?.section.values == [
             GarminOverviewValue(
                 id: GarminConfig.opaqueEntityId(serverId: kitchen.serverId, entityId: kitchen.entityId),
-                value: "On"
+                value: "on"
             ),
             GarminOverviewValue(
                 id: GarminConfig.opaqueEntityId(serverId: hall.serverId, entityId: hall.entityId),
-                value: "Off"
+                value: "off"
             ),
         ])
         #expect(client.sentValuesDeltas.isEmpty)
@@ -1558,7 +1558,7 @@ struct GarminIntegrationServiceTests {
                     requestedItemIds.append(items.map(\.id))
                     requestedCacheModes.append(cacheOnly)
                     completion(.success(GarminStatusSnapshot(statuses: [
-                        .init(id: itemId, label: "Kitchen", value: "On"),
+                        .init(id: itemId, label: "Kitchen", value: "on"),
                     ])))
                 }
             )
@@ -1571,11 +1571,64 @@ struct GarminIntegrationServiceTests {
             service.handle(message, config: config) { _ in }
 
             #expect(client.sentResults.first?.state == .success)
-            #expect(requestedItemIds == [[item.id], [item.id]])
-            #expect(requestedCacheModes == [false, false])
+            #expect(requestedItemIds == [[item.id], [item.id], [item.id], [item.id]])
+            #expect(requestedCacheModes == [false, false, false, false])
             #expect(client.sentValuesDeltas.map(\.values) == [
-                [GarminOverviewValue(id: itemId, value: "On")],
-                [GarminOverviewValue(id: itemId, value: "On")],
+                [GarminOverviewValue(id: itemId, value: "on")],
+                [GarminOverviewValue(id: itemId, value: "on")],
+                [GarminOverviewValue(id: itemId, value: "on")],
+                [GarminOverviewValue(id: itemId, value: "on")],
+            ])
+        }
+    }
+
+    @Test func executorSuccessSuppressesStalePostActionValueUntilDesiredStateArrives() throws {
+        GarminPendingDesiredValueGate.shared.reset()
+        defer { GarminPendingDesiredValueGate.shared.reset() }
+
+        try withServer(identifier: "server-1") { _ in
+            let client = FakeGarminConnectIQClient()
+            let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity)
+            let itemId = GarminConfig.opaqueItemId(for: item)
+            let config = customConfig(actionItems: [item])
+            var scheduledWork: [(TimeInterval, () -> Void)] = []
+            var snapshotValues = ["on", "on", "off"]
+            let service = GarminIntegrationService(
+                client: client,
+                actionExecutor: { _, _, _, completion in
+                    completion(.success(()))
+                },
+                delayedWorkScheduler: { delay, work in
+                    scheduledWork.append((delay, work))
+                }
+            )
+            service.setup(
+                configProvider: { config },
+                statusSnapshotProvider: { _, _, _, completion in
+                    completion(.success(GarminStatusSnapshot(statuses: [
+                        .init(id: itemId, label: "Kitchen", value: snapshotValues.removeFirst()),
+                    ])))
+                }
+            )
+            let message = GarminInboundMessage(
+                type: .callAction,
+                id: itemId,
+                correlationId: "c1",
+                actionId: Service.turnOff.rawValue
+            )
+
+            service.handle(message, config: config) { _ in }
+
+            #expect(client.sentResults.first?.state == .success)
+            #expect(scheduledWork.map(\.0) == [0.4, 1.8, 4.0, 7.0])
+
+            scheduledWork[0].1()
+            scheduledWork[1].1()
+            #expect(client.sentValuesDeltas.isEmpty)
+
+            scheduledWork[2].1()
+            #expect(client.sentValuesDeltas.map(\.values) == [
+                [GarminOverviewValue(id: itemId, value: "off")],
             ])
         }
     }

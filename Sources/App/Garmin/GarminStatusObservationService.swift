@@ -300,9 +300,8 @@ final class GarminStatusObservationService {
         inFlightSnapshotSignature = signature
         let generation = sendGeneration
 
-        let values = overviewValues(snapshot: snapshot, config: config)
+        let values = GarminPendingDesiredValueGate.shared.filter(overviewValues(snapshot: snapshot, config: config))
         guard !values.isEmpty else {
-            lastAttemptedSnapshotSignature = signature
             isSending = false
             inFlightSnapshotSignature = nil
             return
@@ -424,7 +423,7 @@ final class GarminObservedEntityStateTracker {
 
         guard let lastSignature else {
             self.lastSignature = signature
-            return false
+            return true
         }
 
         guard signature != lastSignature else {

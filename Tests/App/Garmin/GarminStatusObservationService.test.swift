@@ -239,6 +239,47 @@ struct GarminStatusObservationServiceTests {
         #expect(client.sentValuesDeltas.map { $0.values.first?.value } == ["20 °C", "21 °C"])
     }
 
+    @Test func pendingDesiredGateSuppressesStaleObservedValueUntilExpectedValueArrives() async throws {
+        try GarminStatusSnapshotCache.clear()
+        GarminPendingDesiredValueGate.shared.reset()
+        defer { GarminPendingDesiredValueGate.shared.reset() }
+
+        let item = statusItem("light.kitchen")
+        let itemId = GarminConfig.opaqueItemId(for: item)
+        GarminPendingDesiredValueGate.shared.recordExpectedValue("off", for: itemId)
+        var onStateChange: (() -> Void)?
+        var currentValue = "on"
+        var refreshCount = 0
+        let client = RecordingGarminStatusClient()
+        let service = makeService(
+            client: client,
+            configProvider: { config(statusItems: [item]) },
+            snapshotProvider: { _, completion in
+                refreshCount += 1
+                completion(.success(statusSnapshot(item: item, value: currentValue, updatedAt: TimeInterval(refreshCount))))
+            },
+            subscriptionProvider: { _, stateChange, _ in
+                onStateChange = stateChange
+                return TestHACancellable()
+            },
+            debounceInterval: 0
+        )
+        defer { service.stop() }
+
+        service.start()
+        try await waitUntil { refreshCount == 1 }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.sentValuesDeltas.isEmpty)
+
+        currentValue = "off"
+        onStateChange?()
+
+        try await waitUntil { client.sentValuesDeltas.count == 1 }
+        #expect(client.sentValuesDeltas.first?.values == [
+            GarminOverviewValue(id: itemId, value: "off"),
+        ])
+    }
+
     @Test func configurationRefreshCancelsOldSubscriptionAndObservesNewStatuses() async throws {
         try GarminStatusSnapshotCache.clear()
         let first = statusItem("sensor.temperature")
@@ -276,10 +317,10 @@ struct GarminStatusObservationServiceTests {
         ])
     }
 
-    @Test func observedEntityTrackerIgnoresInitialAndUnrelatedStateChanges() throws {
+    @Test func observedEntityTrackerRefreshesFirstObservedStateAndIgnoresUnrelatedChanges() throws {
         let tracker = GarminObservedEntityStateTracker(entityIds: ["sensor.temperature"])
 
-        #expect(!tracker.shouldRefresh(states: [
+        #expect(tracker.shouldRefresh(states: [
             try entity("sensor.temperature", state: "20"),
             try entity("switch.unrelated", state: "off"),
         ]))

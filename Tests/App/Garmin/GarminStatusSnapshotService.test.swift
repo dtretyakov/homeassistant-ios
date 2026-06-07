@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.serialized)
 struct GarminStatusSnapshotServiceTests {
-    @Test func snapshotBuildsDisplayReadyValuesInConfiguredOrder() async throws {
+    @Test func snapshotBuildsProtocolValuesInConfiguredOrder() async throws {
         try GarminStatusSnapshotCache.clear()
         try await withServer(identifier: "server-1") {
             let fixedDate = Date(timeIntervalSince1970: 1_710_000_000)
@@ -38,7 +38,7 @@ struct GarminStatusSnapshotServiceTests {
                 GarminConfig.opaqueItemId(for: second),
             ])
             #expect(snapshot.statuses.map(\.label) == ["Temp", "Door"])
-            #expect(snapshot.statuses.map(\.value) == ["22.4 °C", "Open"])
+            #expect(snapshot.statuses.map(\.value) == ["22.4 °C", "on"])
         }
     }
 
@@ -87,6 +87,45 @@ struct GarminStatusSnapshotServiceTests {
         }
     }
 
+    @Test func snapshotProductionPathKeepsEntityStateRaw() async throws {
+        try GarminStatusSnapshotCache.clear()
+        try await withServer(identifier: "server-1") {
+            let server = try #require(Current.servers.server(forServerIdentifier: "server-1"))
+            let api = HomeAssistantAPI(server: server)
+            let connection = HAMockConnection()
+            api.connection = connection
+            Current.setCachedApi(api, for: server.identifier)
+
+            let item = MagicItem(id: "light.kitchen", serverId: "server-1", type: .entity, displayText: "Kitchen")
+            let service = GarminStatusSnapshotService(dateProvider: {
+                Date(timeIntervalSince1970: 1_710_000_011)
+            })
+
+            async let snapshotTask = service.snapshot(
+                config: config(statusItems: [item]),
+                itemInfo: { _ in nil }
+            )
+            for _ in 0..<100 where connection.pendingRequests.isEmpty {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+
+            let pendingRequest = try #require(connection.pendingRequests.first)
+            #expect(pendingRequest.request.type == .rest(.get, "states/light.kitchen"))
+            pendingRequest.completion(.success(.dictionary([
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": [
+                    "friendly_name": "Kitchen",
+                ],
+            ])))
+            let result = try await snapshotTask
+
+            #expect(result.updatedAt == 1_710_000_011)
+            #expect(result.statuses.first?.id == GarminConfig.opaqueItemId(for: item))
+            #expect(result.statuses.first?.value == "on")
+        }
+    }
+
     @Test func snapshotLimitsItemsAndHandlesMissingServer() async throws {
         try GarminStatusSnapshotCache.clear()
         let items = (0 ... GarminConfig.maxStatusItems).map { index in
@@ -108,7 +147,7 @@ struct GarminStatusSnapshotServiceTests {
         let snapshot = try await service.snapshot(config: config(statusItems: items), itemInfo: { _ in nil })
 
         #expect(snapshot.statuses.count == GarminConfig.maxStatusItems)
-        #expect(snapshot.statuses.allSatisfy { $0.value == "Unavailable" })
+        #expect(snapshot.statuses.allSatisfy { $0.value == "unavailable" })
     }
 
     @Test func snapshotWithCacheFallbackSavesFreshSnapshot() async throws {
@@ -224,7 +263,7 @@ struct GarminStatusSnapshotServiceTests {
 
             let snapshot = try result.get()
             #expect(snapshot.statuses.map(\.id) == [GarminConfig.opaqueItemId(for: item)])
-            #expect(snapshot.statuses.map(\.value) == ["Unavailable"])
+            #expect(snapshot.statuses.map(\.value) == ["unavailable"])
         }
     }
 
@@ -242,7 +281,7 @@ struct GarminStatusSnapshotServiceTests {
             )
 
             let snapshot = try result.get()
-            #expect(snapshot.statuses.map(\.value) == ["Unavailable"])
+            #expect(snapshot.statuses.map(\.value) == ["unavailable"])
         }
     }
 
@@ -265,7 +304,7 @@ struct GarminStatusSnapshotServiceTests {
                 itemInfo: { _ in nil }
             )
 
-            #expect(snapshot.statuses.map(\.value) == ["22 °C", "Unavailable"])
+            #expect(snapshot.statuses.map(\.value) == ["22 °C", "unavailable"])
         }
     }
 
@@ -411,7 +450,7 @@ struct GarminStatusSnapshotServiceTests {
 
             let snapshot = try result.get()
             #expect(snapshot.statuses.map(\.id) == [firstId, secondId])
-            #expect(snapshot.statuses.map(\.value) == ["20 °C", "Unavailable"])
+            #expect(snapshot.statuses.map(\.value) == ["20 °C", "unavailable"])
             #expect(snapshot.updatedAt == 1_710_000_011)
         }
     }
@@ -456,7 +495,7 @@ struct GarminStatusSnapshotServiceTests {
 
     @Test func snapshotEncodingDoesNotExposeHomeAssistantInternals() throws {
         let snapshot = GarminStatusSnapshot(
-            statuses: [.init(id: "garmin_status_1", label: "Kitchen", value: "On", iconName: "mdi:lightbulb")],
+            statuses: [.init(id: "garmin_status_1", label: "Kitchen", value: "on", iconName: "mdi:lightbulb")],
             updatedAt: 1_710_000_005
         )
         let encoded = try String(decoding: JSONEncoder().encode(snapshot), as: UTF8.self)

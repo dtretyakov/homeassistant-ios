@@ -552,6 +552,7 @@ final class GarminIntegrationService {
         correlationId: String?,
         completion: @escaping (GarminCommandResult) -> Void
     ) {
+        let values = GarminPendingDesiredValueGate.shared.filter(values)
         guard !values.isEmpty else {
             completion(.init(correlationId: correlationId, state: .success))
             return
@@ -658,6 +659,7 @@ final class GarminIntegrationService {
             switch executionResult {
             case .success:
                 result = .init(id: itemId, correlationId: message.correlationId, state: .success)
+                self?.recordPendingDesiredValue(for: item, actionId: message.actionId)
             case let .failure(error):
                 result = .init(id: itemId, correlationId: message.correlationId, state: .failed, error: error)
             }
@@ -823,6 +825,10 @@ final class GarminIntegrationService {
         send(result, completion: completion)
     }
 
+    private func recordPendingDesiredValue(for item: MagicItem, actionId: String?) {
+        GarminPendingDesiredValueGate.shared.recordExpectedValue(for: item, actionId: actionId)
+    }
+
     private func schedulePostActionValueRefresh(
         for item: MagicItem,
         config: GarminConfig,
@@ -831,7 +837,7 @@ final class GarminIntegrationService {
         guard GarminSupportedDomains.supportsStatus(item) else { return }
         GarminOverviewVisibleEntityRegistry.shared.register(item: item)
 
-        [0.4, 1.8].forEach { delay in
+        [0.4, 1.8, 4.0, 7.0].forEach { delay in
             delayedWorkScheduler(delay) { [weak self] in
                 self?.refreshFreshValues(
                     for: [item],
