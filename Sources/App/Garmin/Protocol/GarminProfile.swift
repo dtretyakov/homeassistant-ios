@@ -141,6 +141,7 @@ public struct GarminOverviewItem: Codable, Equatable {
     public let cap: Int?
     public let confirmation: GarminOverviewActionConfirmation?
     public let domain: String?
+    public let actions: [GarminOverviewAction]
 
     public init(
         id: String,
@@ -148,7 +149,8 @@ public struct GarminOverviewItem: Codable, Equatable {
         type: GarminOverviewItemType,
         cap: Int? = nil,
         confirmation: GarminOverviewActionConfirmation? = nil,
-        domain: String? = nil
+        domain: String? = nil,
+        actions: [GarminOverviewAction] = []
     ) {
         self.id = id
         self.label = label
@@ -156,6 +158,7 @@ public struct GarminOverviewItem: Codable, Equatable {
         self.cap = cap
         self.confirmation = confirmation
         self.domain = domain
+        self.actions = actions
     }
 
     enum CodingKeys: String, CodingKey {
@@ -165,6 +168,7 @@ public struct GarminOverviewItem: Codable, Equatable {
         case cap
         case confirmation
         case domain = "d"
+        case actions
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -181,6 +185,9 @@ public struct GarminOverviewItem: Codable, Equatable {
         if type == .item, let domain {
             try container.encode(domain, forKey: .domain)
         }
+        if type == .item, !actions.isEmpty {
+            try container.encode(actions, forKey: .actions)
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -191,6 +198,45 @@ public struct GarminOverviewItem: Codable, Equatable {
         cap = try container.decodeIfPresent(Int.self, forKey: .cap)
         confirmation = try container.decodeIfPresent(GarminOverviewActionConfirmation.self, forKey: .confirmation)
         domain = try container.decodeIfPresent(String.self, forKey: .domain)
+        actions = try container.decodeIfPresent([GarminOverviewAction].self, forKey: .actions) ?? []
+    }
+}
+
+public struct GarminOverviewAction: Codable, Equatable {
+    public let id: String
+    public let label: String
+    public let confirmation: GarminOverviewActionConfirmation?
+    public let primary: Bool
+
+    public init(
+        id: String,
+        label: String,
+        confirmation: GarminOverviewActionConfirmation? = nil,
+        primary: Bool = false
+    ) {
+        self.id = id
+        self.label = label
+        self.confirmation = confirmation
+        self.primary = primary
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case confirmation
+        case primary
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        if confirmation == .required {
+            try container.encode(confirmation, forKey: .confirmation)
+        }
+        if primary {
+            try container.encode(primary, forKey: .primary)
+        }
     }
 }
 
@@ -581,7 +627,12 @@ final class GarminHomeOverviewSource {
                 "l:\(page.limit)",
                 "po:\(page.previousOffset.map(String.init) ?? "")",
                 "no:\(page.nextOffset.map(String.init) ?? "")",
-            ] + page.items.map { "\($0.id)|\($0.label)|\($0.type.rawValue)|\($0.cap ?? 0)|\($0.confirmation?.rawValue ?? "")|\($0.domain ?? "")" } + valueEtagParts),
+            ] + page.items.map { item in
+                let actions = item.actions
+                    .map { "\($0.id),\($0.label),\($0.confirmation?.rawValue ?? ""),\($0.primary)" }
+                    .joined(separator: ";")
+                return "\(item.id)|\(item.label)|\(item.type.rawValue)|\(item.cap ?? 0)|\(item.confirmation?.rawValue ?? "")|\(item.domain ?? "")|\(actions)"
+            } + valueEtagParts),
             items: page.items,
             values: values,
             pageOffset: page.offset,
@@ -645,7 +696,8 @@ final class GarminHomeOverviewSource {
             type: .item,
             cap: capability,
             confirmation: confirmation(for: item),
-            domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain)
+            domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain),
+            actions: actions(for: item)
         )
     }
 
@@ -663,7 +715,8 @@ final class GarminHomeOverviewSource {
             type: .item,
             cap: capability,
             confirmation: confirmation(for: item),
-            domain: GarminSupportedDomains.compactDomainCode(for: item)
+            domain: GarminSupportedDomains.compactDomainCode(for: item),
+            actions: actions(for: item)
         )
     }
 
@@ -677,7 +730,8 @@ final class GarminHomeOverviewSource {
             type: .item,
             cap: capability,
             confirmation: confirmation(for: item),
-            domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain)
+            domain: GarminSupportedDomains.compactDomainCode(rawDomain: entity.domain),
+            actions: actions(for: item)
         )
     }
 
@@ -718,6 +772,91 @@ final class GarminHomeOverviewSource {
         let requiresConfirmation = item.customization?.requiresConfirmation
             ?? GarminActionConfirmationPolicy.defaultRequiresConfirmation(for: item)
         return requiresConfirmation ? .required : nil
+    }
+
+    private func actions(for item: MagicItem) -> [GarminOverviewAction] {
+        guard GarminSupportedDomains.supportsAction(item) else { return [] }
+        let confirmation = confirmation(for: item)
+
+        switch item.type {
+        case .script, .scene:
+            return [.init(id: Service.turnOn.rawValue, label: "Run", confirmation: confirmation, primary: true)]
+        case .entity:
+            guard let domain = item.domain else { return [] }
+            let state = stateProvider(item.serverId).first(where: { $0.entityId == item.id })
+            return actions(for: item, domain: domain, state: state, confirmation: confirmation)
+        case .action, .folder, .assistPipeline, .assistPrompt:
+            return []
+        }
+    }
+
+    private func actions(
+        for item: MagicItem,
+        domain: Domain,
+        state: GarminHomeSummaryEntityState?,
+        confirmation: GarminOverviewActionConfirmation?
+    ) -> [GarminOverviewAction] {
+        let actionId = state.flatMap {
+            GarminDesiredStateActionResolver.actionId(rawDomain: domain.rawValue, state: $0.state, attributes: $0.attributes)
+        }
+        let lockSupportsOpen = supportsLockOpen(state, itemServerId: item.serverId, itemId: item.id)
+        let isPrimary = domain != .lock || !lockSupportsOpen
+        var actions: [GarminOverviewAction] = []
+
+        if domain == .lock, lockSupportsOpen {
+            actions.append(.init(
+                id: GarminDesiredStateActionResolver.openLockActionId,
+                label: "Open",
+                confirmation: confirmation,
+                primary: true
+            ))
+        }
+
+        if let actionId {
+            actions.append(.init(
+                id: actionId,
+                label: label(for: actionId),
+                confirmation: confirmation,
+                primary: isPrimary
+            ))
+        }
+
+        return actions
+    }
+
+    private func supportsLockOpen(_ state: GarminHomeSummaryEntityState?, itemServerId: String?, itemId: String?) -> Bool {
+        if let state, GarminDesiredStateActionResolver.supportsLockOpen(state.attributes) {
+            return true
+        }
+        guard let itemServerId, let itemId else { return false }
+        return registrySupportedFeatures(serverId: itemServerId, entityId: itemId).map { ($0 & 1) != 0 } ?? false
+    }
+
+    private func registrySupportedFeatures(serverId: String, entityId: String) -> Int? {
+        try? AppEntityRegistry.config(serverId: serverId).first { $0.entityId == entityId }?.supportedFeatures
+    }
+
+    private func label(for actionId: String) -> String {
+        switch actionId {
+        case Service.turnOn.rawValue:
+            return "Turn on"
+        case Service.turnOff.rawValue:
+            return "Turn off"
+        case Service.openCover.rawValue:
+            return "Open"
+        case Service.closeCover.rawValue:
+            return "Close"
+        case Service.lock.rawValue:
+            return "Lock"
+        case Service.unlock.rawValue:
+            return "Unlock"
+        case Service.mediaPlay.rawValue:
+            return "Play"
+        case Service.mediaPause.rawValue:
+            return "Pause"
+        default:
+            return "Run"
+        }
     }
 
     private func magicItemType(for domain: String) -> MagicItem.ItemType {

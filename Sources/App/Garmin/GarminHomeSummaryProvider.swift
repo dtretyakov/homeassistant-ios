@@ -42,8 +42,11 @@ struct GarminHomeSummaryDetailItem {
 }
 
 enum GarminDesiredStateActionResolver {
+    static let openLockActionId = "open_lock"
+
     private static let mediaPlayerFeaturePause = 1
     private static let mediaPlayerFeaturePlay = 16_384
+    private static let lockFeatureOpen = 1
 
     static func actionId(
         rawDomain: String,
@@ -100,6 +103,8 @@ enum GarminDesiredStateActionResolver {
             return .lock
         case (.lock, Service.unlock.rawValue):
             return .unlock
+        case (.lock, openLockActionId):
+            return .open
         case (.mediaPlayer, Service.mediaPlay.rawValue):
             return .mediaPlay
         case (.mediaPlayer, Service.mediaPause.rawValue):
@@ -110,6 +115,14 @@ enum GarminDesiredStateActionResolver {
     }
 
     private static func supportsMediaPlayerFeature(_ attributes: [String: Any], feature: Int) -> Bool {
+        supportsFeature(attributes, feature: feature)
+    }
+
+    static func supportsLockOpen(_ attributes: [String: Any]) -> Bool {
+        supportsFeature(attributes, feature: lockFeatureOpen)
+    }
+
+    private static func supportsFeature(_ attributes: [String: Any], feature: Int) -> Bool {
         guard let rawValue = attributes["supported_features"] else { return false }
         let supportedFeatures: Int?
         if let int = rawValue as? Int {

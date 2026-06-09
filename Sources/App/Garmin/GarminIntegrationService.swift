@@ -1258,17 +1258,34 @@ private enum GarminActionExecutor {
     }
 
     private static func isActionCurrentlySupported(item: MagicItem, domain: Domain, actionId: String) -> Bool {
-        guard domain == .mediaPlayer else { return true }
+        guard domain == .mediaPlayer || (domain == .lock && actionId == GarminDesiredStateActionResolver.openLockActionId) else {
+            return true
+        }
         guard let state = GarminHomeSummaryStateCache.shared
             .states(serverId: item.serverId)
             .first(where: { $0.entityId == item.id }) else {
+            if domain == .lock {
+                return registrySupportsLockOpen(item: item)
+            }
             return false
+        }
+        if domain == .lock {
+            return GarminDesiredStateActionResolver.supportsLockOpen(state.attributes) || registrySupportsLockOpen(item: item)
         }
         return GarminDesiredStateActionResolver.actionId(
             rawDomain: domain.rawValue,
             state: state.state,
             attributes: state.attributes
         ) == actionId
+    }
+
+    private static func registrySupportsLockOpen(item: MagicItem) -> Bool {
+        guard let supportedFeatures = try? AppEntityRegistry.config(serverId: item.serverId)
+            .first(where: { $0.entityId == item.id })?
+            .supportedFeatures else {
+            return false
+        }
+        return (supportedFeatures & 1) != 0
     }
 
     static func map(error: Error) -> GarminIntegrationError {
